@@ -1,0 +1,16 @@
+{
+  "name": "certronic-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sincroniza vehiculos y personal desde el portal Certronic hacia Supabase",
+  "scripts": {
+    "sync": "node scripts/sync-certronic.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
