@@ -254,8 +254,12 @@ function mapPersonal(raw) {
     apellido: raw["Apellido"],
     nombre: raw["Nombre"],
     cuil: String(raw["Cuil"] || "").replace(/\D/g, ""),
-    empresa: raw["Empresa"] || null,
-    funcion: raw["Funcion"] || raw["Función"] || null,
+    // OJO: la tabla de Personal del portal Certronic NO trae Empresa
+    // ni Funcion, asi que a proposito NO se incluyen esas claves aca.
+    // Si se incluyeran (aunque sea con valor null), el upsert las
+    // pisaria en cada corrida y borraria lo que se haya cargado a mano
+    // o importado por Excel. Al omitirlas, el upsert deja esas dos
+    // columnas tal como estaban en Supabase.
     estado: normalizeEstado(raw["Estado"]),
     motivo: (raw["Motivo No Acceso"] || "").trim() || null,
     fecha: ddmmyyyyToIso(raw["Fecha"]),
