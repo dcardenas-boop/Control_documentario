@@ -171,6 +171,14 @@
   .toolbar button:hover{background:var(--bg);}
 
   .subtabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+  .subtabs-bar{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+    background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:12px 14px;margin-bottom:16px;
+  }
+  .subtabs-bar .subtabs{margin-bottom:0;}
+  .subtabs-bar .divider{width:1px;align-self:stretch;background:var(--border);}
+  @media (max-width:640px){ .subtabs-bar{flex-direction:column;align-items:stretch;} .subtabs-bar .divider{display:none;} }
   .subtab{
     padding:9px 15px;
     border-radius:8px;
@@ -511,15 +519,17 @@
 
     <div class="cards-row" id="cardsVehiculos"></div>
 
-    <div class="subtabs" id="subtabsVehiculos">
-      <div class="subtab active" data-view="listado">Listado</div>
-      <div class="subtab" data-view="mes">Por mes</div>
-    </div>
-
-    <div class="subtabs" id="filtroRapidoVehiculos">
-      <div class="subtab active" data-quick="todos">Todos</div>
-      <div class="subtab" data-quick="no_habilitados">No habilitados</div>
-      <div class="subtab" data-quick="habilitados">Habilitados</div>
+    <div class="subtabs-bar">
+      <div class="subtabs" id="subtabsVehiculos">
+        <div class="subtab active" data-view="listado">Listado</div>
+        <div class="subtab" data-view="mes">Por mes</div>
+      </div>
+      <div class="divider"></div>
+      <div class="subtabs" id="filtroRapidoVehiculos">
+        <div class="subtab active" data-quick="todos">Todos</div>
+        <div class="subtab" data-quick="no_habilitados">No habilitados</div>
+        <div class="subtab" data-quick="habilitados">Habilitados</div>
+      </div>
     </div>
 
     <!-- Listado view -->
@@ -614,15 +624,17 @@
 
     <div class="cards-row" id="cardsPersonal"></div>
 
-    <div class="subtabs" id="subtabsPersonal">
-      <div class="subtab active" data-view="listado">Listado</div>
-      <div class="subtab" data-view="mes">Por mes</div>
-    </div>
-
-    <div class="subtabs" id="filtroRapidoPersonal">
-      <div class="subtab active" data-quick="todos">Todos</div>
-      <div class="subtab" data-quick="no_habilitados">No habilitados</div>
-      <div class="subtab" data-quick="habilitados">Habilitados</div>
+    <div class="subtabs-bar">
+      <div class="subtabs" id="subtabsPersonal">
+        <div class="subtab active" data-view="listado">Listado</div>
+        <div class="subtab" data-view="mes">Por mes</div>
+      </div>
+      <div class="divider"></div>
+      <div class="subtabs" id="filtroRapidoPersonal">
+        <div class="subtab active" data-quick="todos">Todos</div>
+        <div class="subtab" data-quick="no_habilitados">No habilitados</div>
+        <div class="subtab" data-quick="habilitados">Habilitados</div>
+      </div>
     </div>
 
     <!-- Listado view -->
