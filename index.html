@@ -2039,12 +2039,18 @@ function hideError(){
   document.getElementById('errorBanner').classList.remove('show');
 }
 
-async function loadData(){
-  showLoading(true);
+let isLoadingData = false;
+
+async function loadData(opts){
+  opts = opts || {};
+  if(isLoadingData) return; // evita refrescos superpuestos
+  isLoadingData = true;
+  if(!opts.silent) showLoading(true);
 
   if(SUPABASE_URL.includes('TU-PROYECTO') || SUPABASE_ANON_KEY.includes('TU-ANON-KEY')){
     showLoading(false);
     showError('<strong>Falta configurar la conexión a Supabase.</strong> Completá SUPABASE_URL y SUPABASE_ANON_KEY en el código.');
+    isLoadingData = false;
     return;
   }
 
@@ -2106,9 +2112,13 @@ async function loadData(){
     populatePersonalFilters();
     renderAll();
     showLoading(false);
+    isLoadingData = false;
   }catch(err){
     showLoading(false);
-    showError('<strong>No se pudo conectar con Supabase.</strong> Detalle: <code>' + escapeHtml(err.message || String(err)) + '</code>');
+    isLoadingData = false;
+    if(!opts.silent){
+      showError('<strong>No se pudo conectar con Supabase.</strong> Detalle: <code>' + escapeHtml(err.message || String(err)) + '</code>');
+    }
   }
 }
 
@@ -2216,6 +2226,24 @@ document.getElementById('altaFechaCarga').value = todayISO();
 document.getElementById('rechazoFecha').value = todayISO();
 document.getElementById('rechazoFechaActualizacion').value = todayISO();
 loadData();
+
+// Refresco automatico en segundo plano cada 5 minutos, sin tapar la
+// pantalla con el spinner (opts.silent). Se pausa mientras la pestaña
+// esta oculta para no gastar de mas, y retoma al volver a mirarla.
+const AUTO_REFRESH_MS = 5 * 60 * 1000;
+let autoRefreshTimer = setInterval(() => {
+  if(document.visibilityState === 'visible'){
+    loadData({ silent: true });
+  }
+}, AUTO_REFRESH_MS);
+
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible'){
+    // Al volver a la pestaña, traer datos frescos por las dudas
+    // haya pasado bastante tiempo.
+    loadData({ silent: true });
+  }
+});
 </script>
 </body>
 </html>
