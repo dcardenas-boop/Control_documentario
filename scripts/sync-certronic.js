@@ -278,8 +278,26 @@ function normalizeEstado(s) {
 // ------------------------------------------------------------
 // Upsert a Supabase via REST API
 // ------------------------------------------------------------
+function dedupeByKey(rows, key) {
+  // Postgres no permite que un mismo INSERT ... ON CONFLICT toque la
+  // misma fila dos veces en el mismo comando. Si el scraping trajo el
+  // mismo dominio/cuil repetido (puede pasar por un roce de paginado
+  // en el portal), nos quedamos con la ULTIMA aparicion de cada uno.
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row[key], row);
+  }
+  return Array.from(map.values());
+}
+
 async function upsertToSupabase(table, rows, conflictColumn) {
-  if (rows.length === 0) return;
+  const deduped = dedupeByKey(rows, conflictColumn);
+  if (deduped.length !== rows.length) {
+    console.log(
+      `  -> ${table}: se encontraron ${rows.length - deduped.length} fila(s) con '${conflictColumn}' repetido, se descartan duplicados antes de subir`
+    );
+  }
+  if (deduped.length === 0) return;
   const url = `${SUPABASE_URL}/rest/v1/${table}?on_conflict=${conflictColumn}`;
   const res = await fetch(url, {
     method: "POST",
@@ -289,7 +307,7 @@ async function upsertToSupabase(table, rows, conflictColumn) {
       Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
       Prefer: "resolution=merge-duplicates,return=minimal",
     },
-    body: JSON.stringify(rows),
+    body: JSON.stringify(deduped),
   });
   if (!res.ok) {
     const text = await res.text();
