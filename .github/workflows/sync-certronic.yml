@@ -2,8 +2,9 @@ name: Sync Certronic -> Supabase
 
 on:
   schedule:
-    # 08:00 Argentina (UTC-3) = 11:00 UTC. Ajustar si hace falta.
-    - cron: "0 11 * * *"
+    # Corre cada 10 minutos. GitHub no garantiza el minuto exacto,
+    # puede haber algunos minutos de demora en horas de mucha carga.
+    - cron: "*/10 * * * *"
   workflow_dispatch: {} # permite correrlo a mano desde la pestaña Actions
 
 jobs:
