@@ -1082,13 +1082,69 @@ function altaToVehiculo(a){
   return { dominio:a.dominio||'', marca:a.marca||'', modelo:a.modelo||'',
     estado:'Habilitado', motivo:null, fecha:a.fechaAprobacion||a.fechaCarga||null, servicio_estado:'en_servicio', _altaId:a.id };
 }
+// Las altas aprobadas que YA tienen su propia fila en Supabase (creada por
+// crearFilaDesdeAlta / migrarAltasAprobadasSinFila) no se vuelven a mostrar
+// como sintéticas acá, para no duplicarlas; solo se sintetizan las que por
+// algún motivo todavía no tienen fila propia (y esas quedan sin poder
+// editarse hasta que la tengan).
 function personalEffectiveList(){
-  const aprobadas = altas.filter(a=>a.tipo==='persona' && a.estado==='alta_aprobada').map(altaToPersona);
+  const aprobadas = altas
+    .filter(a=>a.tipo==='persona' && a.estado==='alta_aprobada' && !(a.cuil && PERSONAL_DATA.some(p=>p.cuil===a.cuil)))
+    .map(altaToPersona);
   return PERSONAL_DATA.concat(aprobadas);
 }
 function vehiculosEffectiveBase(){
-  const aprobadas = altas.filter(a=>a.tipo==='vehiculo' && a.estado==='alta_aprobada').map(altaToVehiculo);
+  const aprobadas = altas
+    .filter(a=>a.tipo==='vehiculo' && a.estado==='alta_aprobada' && !(a.dominio && VEHICULOS_DATA.some(v=>v.dominio===a.dominio)))
+    .map(altaToVehiculo);
   return VEHICULOS_DATA.concat(aprobadas);
+}
+
+/* ---------- Crear la fila propia (en Supabase) de una alta aprobada ---------- */
+async function crearFilaDesdeAlta(a){
+  try{
+    if(a.tipo === 'persona'){
+      if(!a.cuil || PERSONAL_DATA.some(p=>p.cuil===a.cuil)) return;
+      const row = {
+        apellido: a.apellido || null, nombre: a.nombre || null, cuil: a.cuil,
+        empresa: a.empresa || null, funcion: a.funcion || null,
+        estado: 'Habilitado', motivo: null, fecha: a.fechaAprobacion || a.fechaCarga || null,
+      };
+      const { data, error } = await supabaseClient.from('personal').upsert(row, { onConflict: 'cuil' }).select().single();
+      if(error) throw error;
+      PERSONAL_DATA.push({
+        id: data.id, apellido: data.apellido || '', nombre: data.nombre || '', cuil: data.cuil || '',
+        empresa: data.empresa || '', funcion: data.funcion || '', estado: data.estado,
+        motivo: data.motivo || null, fecha: data.fecha || null,
+      });
+    } else {
+      if(!a.dominio || VEHICULOS_DATA.some(v=>v.dominio===a.dominio)) return;
+      const row = {
+        dominio: a.dominio, marca: a.marca || null, modelo: a.modelo || null,
+        estado: 'Habilitado', motivo: null, fecha: a.fechaAprobacion || a.fechaCarga || null,
+      };
+      const { data, error } = await supabaseClient.from('vehiculos').upsert(row, { onConflict: 'dominio' }).select().single();
+      if(error) throw error;
+      VEHICULOS_DATA.push({
+        id: data.id, dominio: data.dominio, marca: data.marca || '', modelo: data.modelo != null ? String(data.modelo) : '',
+        estado: data.estado, motivo: data.motivo || null, fecha: data.fecha || null,
+        en_servicio: data.en_servicio !== false, servicio_estado: data.servicio_estado || 'en_servicio',
+      });
+    }
+  }catch(err){
+    toast('Se guardó el estado de la alta, pero no se pudo crear su registro propio: ' + (err.message||err));
+  }
+}
+
+/* ---------- Migración: altas ya aprobadas antes de este cambio, que
+   todavía no tienen fila propia en vehiculos/personal ---------- */
+async function migrarAltasAprobadasSinFila(){
+  const faltantes = altas.filter(a => a.estado === 'alta_aprobada' &&
+    ((a.tipo==='persona' && a.cuil && !PERSONAL_DATA.some(p=>p.cuil===a.cuil)) ||
+     (a.tipo==='vehiculo' && a.dominio && !VEHICULOS_DATA.some(v=>v.dominio===a.dominio))));
+  for(const a of faltantes){
+    await crearFilaDesdeAlta(a);
+  }
 }
 
 /* ---------- Rechazos en acceso a yacimiento (guardado en Supabase) ---------- */
@@ -1904,7 +1960,12 @@ function renderAltasTable(){
       try{
         const { error } = await supabaseClient.from('altas').update({ estado: a.estado, fecha_aprobacion: a.fechaAprobacion }).eq('id', id);
         if(error) throw error;
-        toast(nuevoEstado === 'alta_aprobada' ? 'Alta aprobada — ya suma en su solapa correspondiente' : 'Estado de alta actualizado');
+        if(nuevoEstado === 'alta_aprobada'){
+          await crearFilaDesdeAlta(a);
+          toast('Alta aprobada — ya tiene su propio registro editable en su solapa');
+        } else {
+          toast('Estado de alta actualizado');
+        }
       }catch(err){
         a.estado = prevEstado; a.fechaAprobacion = prevFecha;
         toast('No se pudo guardar: ' + (err.message||err));
@@ -2012,13 +2073,19 @@ function initAltasForm(){
     try{
       const { data, error } = await supabaseClient.from('altas').insert(a).select().single();
       if(error) throw error;
-      altas.push({
+      const nueva = {
         id: data.id, tipo: data.tipo, apellido: data.apellido, nombre: data.nombre, cuil: data.cuil,
         empresa: data.empresa, funcion: data.funcion, dominio: data.dominio, marca: data.marca, modelo: data.modelo,
         fechaCarga: data.fecha_carga, motivo: data.motivo, estado: data.estado, fechaAprobacion: data.fecha_aprobacion,
-      });
+      };
+      altas.push(nueva);
+      if(nueva.estado === 'alta_aprobada'){
+        await crearFilaDesdeAlta(nueva);
+        toast('Alta guardada y aprobada — ya tiene su propio registro editable');
+      } else {
+        toast('Alta guardada');
+      }
       document.getElementById('formAltaPanel').style.display = 'none';
-      toast(estado === 'alta_aprobada' ? 'Alta guardada y aprobada' : 'Alta guardada');
       renderAll();
     }catch(err){
       toast('No se pudo guardar la alta: ' + (err.message||err));
@@ -2301,6 +2368,11 @@ async function loadData(opts){
     const allDates = [...vRes.data, ...pRes.data].map(r => r.updated_at).filter(Boolean).sort();
     const lastUpdate = allDates.length ? new Date(allDates[allDates.length - 1]) : new Date();
     document.getElementById('updateStamp').textContent = 'Actualizado al ' + toDisplayDateStamp(lastUpdate);
+
+    // Altas que quedaron aprobadas antes de este cambio y todavía no
+    // tienen fila propia en vehiculos/personal: se las crea ahora para
+    // que pasen a ser editables como cualquier otro registro.
+    await migrarAltasAprobadasSinFila();
 
     hideError();
     populateVehiculosFilters();
