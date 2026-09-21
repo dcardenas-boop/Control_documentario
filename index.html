@@ -436,6 +436,10 @@
     padding:6px 9px;border-radius:7px;border:1px solid var(--border);
     background:var(--bg);color:var(--text);font-size:0.8rem;font-family:var(--font);
   }
+  .servicio-select{font-weight:700;cursor:pointer;min-width:220px;}
+  .servicio-select.status-habilitado{background:var(--green-bg);color:var(--green);border-color:var(--green);}
+  .servicio-select.status-suspendido{background:var(--amber-bg);color:var(--amber);border-color:var(--amber);}
+  .servicio-select.status-inhabilitado{background:var(--red-bg);color:var(--red);border-color:var(--red);}
   .inline-date{
     padding:6px 8px;border-radius:7px;border:1px solid var(--border);
     background:var(--bg);color:var(--text);font-size:0.78rem;font-family:var(--font);
@@ -496,10 +500,12 @@
 <div class="header">
   <div>
     <h1>Control de Flota y Personal — PETROSAR</h1>
-    <p>Panel de habilitación y seguimiento</p>
+    <p>Panel de habilitación y seguimiento — todos ven la misma base, cargada a mano</p>
   </div>
   <div class="header-actions">
     <span class="update-stamp" id="updateStamp">Actualizado al 11/09/2026</span>
+    <input type="file" id="inputImportarExcel" accept=".xlsx,.xls" style="display:none">
+    <button class="btn-update" id="btnImportarExcel">Importar Excel</button>
     <button class="btn-update" id="btnRefresh">Actualizar</button>
   </div>
 </div>
@@ -549,6 +555,7 @@
           <option value="">Servicio: todos</option>
           <option value="en_servicio">En servicio</option>
           <option value="en_reparacion">En reparación</option>
+          <option value="baja">Baja</option>
         </select>
         <button id="btnLimpiarVehiculos">Limpiar</button>
         <button class="primary" id="btnExportarVehiculos">Exportar CSV</button>
@@ -768,13 +775,15 @@
         <div class="form-field">
           <label>Estado</label>
           <select id="altaEstado">
-            <option value="pendiente">Pendiente</option>
-            <option value="aprobado">Aprobado</option>
-            <option value="rechazado">Rechazado</option>
+            <option value="inicio_alta">Inicio de alta</option>
+            <option value="pae_control_documentario">Pendiente de auditoría PAE - Control documentario</option>
+            <option value="pae_relaciones_laborales">Pendiente de auditoría PAE - Relaciones laborales</option>
+            <option value="carga_documentacion">Carga de documentación</option>
+            <option value="alta_aprobada">Alta aprobada</option>
           </select>
         </div>
         <div class="form-field">
-          <label>Fecha de aprobación</label>
+          <label>Fecha de este estado</label>
           <input type="date" id="altaFechaAprobacion">
         </div>
       </div>
@@ -800,7 +809,7 @@
               <th>Fecha de carga</th>
               <th>Motivo</th>
               <th>Estado</th>
-              <th>Fecha de aprobación</th>
+              <th>Fecha de este estado</th>
               <th>Acción</th>
             </tr>
           </thead>
@@ -882,79 +891,95 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // ============================================================
-// CONFIGURACION DE SUPABASE
+// Panel conectado a Supabase: todos los que abren el link ven
+// los mismos datos. Vehiculos y Personal se cargan a mano (con
+// "Importar Excel", que sube el Excel a Supabase) — ya NO se
+// sincronizan automáticamente desde Certronic. Altas y Rechazos
+// se siguen cargando a mano desde sus propios formularios.
 // ============================================================
+
 const SUPABASE_URL = 'https://ygteosjbnrhsqjfapbos.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlndGVvc2pibnJoc3FqZmFwYm9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkxNDgxMDgsImV4cCI6MjEwNDcyNDEwOH0.pvvTEbiYvG6Tx-KFBO_H5EdLdYFlkzqbpy1kjT_4zSg';
-
 let supabaseClient = null;
+
 let PERSONAL_DATA = [];
 let VEHICULOS_DATA = [];
 
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-/* ---------- storage helpers (per-viewer, this browser only — solo para Altas/Rechazos) ---------- */
-function loadJSON(key, fallback){
-  try{
-    const raw = localStorage.getItem(key);
-    if(!raw) return fallback;
-    return JSON.parse(raw);
-  }catch(e){ return fallback; }
+// Flujo de estados de Gestion de Alta, en orden.
+const ALTA_ESTADOS = [
+  { value: 'inicio_alta', label: 'Inicio de alta', badge: 'status-suspendido' },
+  { value: 'pae_control_documentario', label: 'Pendiente de auditoría PAE - Control documentario', badge: 'status-suspendido' },
+  { value: 'pae_relaciones_laborales', label: 'Pendiente de auditoría PAE - Relaciones laborales', badge: 'status-suspendido' },
+  { value: 'carga_documentacion', label: 'Carga de documentación', badge: 'status-suspendido' },
+  { value: 'alta_aprobada', label: 'Alta aprobada', badge: 'status-habilitado' },
+];
+function altaEstadoInfo(value){
+  return ALTA_ESTADOS.find(e => e.value === value) || ALTA_ESTADOS[0];
 }
-function saveJSON(key, val){
-  try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){}
+function altaEstadoOptionsHtml(selected){
+  return ALTA_ESTADOS.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
 }
 
-/* ---------- Servicio (en_servicio) ahora vive en Supabase, no en localStorage ---------- */
+// Estados de servicio de Vehiculos (tres opciones).
+const SERVICIO_ESTADOS = [
+  { value: 'en_servicio', label: 'En servicio', badge: 'status-habilitado' },
+  { value: 'en_reparacion', label: 'En reparación', badge: 'status-suspendido' },
+  { value: 'baja', label: 'Baja', badge: 'status-inhabilitado' },
+];
+function servicioEstadoInfo(value){
+  return SERVICIO_ESTADOS.find(e => e.value === value) || SERVICIO_ESTADOS[0];
+}
+function servicioOptionsHtml(selected){
+  return SERVICIO_ESTADOS.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
+}
+
+/* ---------- Servicio (servicio_estado), tres valores, guardado en Supabase ---------- */
 function getServicio(dominio){
   const v = VEHICULOS_DATA.find(x => x.dominio === dominio);
-  return (v && v.en_servicio === false) ? 'en_reparacion' : 'en_servicio';
+  return (v && v.servicio_estado) || 'en_servicio';
 }
 async function setServicio(dominio, value){
   const v = VEHICULOS_DATA.find(x => x.dominio === dominio);
   if(!v) return;
-  const nuevoValor = value !== 'en_reparacion';
-  const previo = v.en_servicio;
-  v.en_servicio = nuevoValor; // optimista
+  const prev = v.servicio_estado;
+  v.servicio_estado = value;
   try{
-    const { error } = await supabaseClient.from('vehiculos').update({ en_servicio: nuevoValor }).eq('id', v.id);
+    const { error } = await supabaseClient.from('vehiculos').update({ servicio_estado: value }).eq('dominio', dominio);
     if(error) throw error;
   }catch(err){
-    v.en_servicio = previo;
-    toast('No se pudo guardar el cambio de servicio: ' + (err.message || err));
-    renderCardsVehiculos();
-    renderVehiculos();
+    v.servicio_estado = prev;
+    toast('No se pudo guardar el cambio de servicio: ' + (err.message||err));
+    renderCardsVehiculos(); renderVehiculos();
   }
 }
 
-/* ---------- Borrado real en Supabase (vehiculos y personal) ---------- */
+/* ---------- Borrado en Supabase (vehiculos y personal) ---------- */
 async function deleteVehiculo(dominio){
-  const v = VEHICULOS_DATA.find(x => x.dominio === dominio);
-  if(!v) return;
   try{
-    const { error } = await supabaseClient.from('vehiculos').delete().eq('id', v.id);
+    const { error } = await supabaseClient.from('vehiculos').delete().eq('dominio', dominio);
     if(error) throw error;
     VEHICULOS_DATA = VEHICULOS_DATA.filter(x => x.dominio !== dominio);
   }catch(err){
-    toast('No se pudo eliminar: ' + (err.message || err));
+    toast('No se pudo eliminar el vehículo: ' + (err.message||err));
   }
 }
 async function deletePersona(cuil){
-  const p = PERSONAL_DATA.find(x => x.cuil === cuil);
-  if(!p) return;
   try{
-    const { error } = await supabaseClient.from('personal').delete().eq('id', p.id);
+    const { error } = await supabaseClient.from('personal').delete().eq('cuil', cuil);
     if(error) throw error;
     PERSONAL_DATA = PERSONAL_DATA.filter(x => x.cuil !== cuil);
   }catch(err){
-    toast('No se pudo eliminar: ' + (err.message || err));
+    toast('No se pudo eliminar la persona: ' + (err.message||err));
   }
 }
 
-/* ---------- Gestión de Alta (queda local por ahora) ---------- */
-let altas = []; // se carga desde Supabase en loadData()
+/* ---------- Gestión de Alta (guardado en Supabase) ---------- */
+let altas = [];
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
 function altaToPersona(a){
@@ -963,19 +988,19 @@ function altaToPersona(a){
 }
 function altaToVehiculo(a){
   return { dominio:a.dominio||'', marca:a.marca||'', modelo:a.modelo||'',
-    estado:'Habilitado', motivo:null, fecha:a.fechaAprobacion||a.fechaCarga||null, en_servicio:true, _altaId:a.id };
+    estado:'Habilitado', motivo:null, fecha:a.fechaAprobacion||a.fechaCarga||null, servicio_estado:'en_servicio', _altaId:a.id };
 }
 function personalEffectiveList(){
-  const aprobadas = altas.filter(a=>a.tipo==='persona' && a.estado==='aprobado').map(altaToPersona);
+  const aprobadas = altas.filter(a=>a.tipo==='persona' && a.estado==='alta_aprobada').map(altaToPersona);
   return PERSONAL_DATA.concat(aprobadas);
 }
 function vehiculosEffectiveBase(){
-  const aprobadas = altas.filter(a=>a.tipo==='vehiculo' && a.estado==='aprobado').map(altaToVehiculo);
+  const aprobadas = altas.filter(a=>a.tipo==='vehiculo' && a.estado==='alta_aprobada').map(altaToVehiculo);
   return VEHICULOS_DATA.concat(aprobadas);
 }
 
-/* ---------- Rechazos en acceso a yacimiento (queda local por ahora) ---------- */
-let rechazos = []; // se carga desde Supabase en loadData()
+/* ---------- Rechazos en acceso a yacimiento (guardado en Supabase) ---------- */
+let rechazos = [];
 
 function toast(msg){
   const t = document.getElementById('toast');
@@ -1089,6 +1114,7 @@ function renderCardsVehiculos(){
   const requierenGestion = total - habilitadosEfectivos;
   const pct = total ? Math.round((habilitadosEfectivos/total)*100) : 0;
   const enReparacion = activos.filter(v => v.estado === 'Habilitado' && getServicio(v.dominio) === 'en_reparacion').length;
+  const enBaja = activos.filter(v => getServicio(v.dominio) === 'baja').length;
 
   document.getElementById('cardsVehiculos').innerHTML = `
     <div class="card">
@@ -1104,7 +1130,7 @@ function renderCardsVehiculos(){
     <div class="card red">
       <div class="label">Requieren gestión</div>
       <div class="value">${requierenGestion}</div>
-      <div class="sub">${enReparacion} en reparación · resto sin habilitación</div>
+      <div class="sub">${enReparacion} en reparación · ${enBaja} de baja · resto sin habilitación</div>
     </div>
     <div class="card accent">
       <div class="label">% Habilitación</div>
@@ -1117,7 +1143,6 @@ function renderCardsVehiculos(){
 
 function vehiculoRowHtml(v){
   const servicio = getServicio(v.dominio);
-  const on = servicio === 'en_servicio';
   const motivoHtml = (v.estado !== 'Habilitado' && v.motivo) ? `<span class="motivo-badge">${escapeHtml(v.motivo)}</span>` : `<span class="motivo-empty">—</span>`;
   return `
     <tr data-dominio="${escapeHtml(v.dominio)}">
@@ -1126,10 +1151,9 @@ function vehiculoRowHtml(v){
       <td>${escapeHtml(v.modelo)}</td>
       <td><span class="status-pill ${statusClass(v.estado)}">${escapeHtml(v.estado)}</span></td>
       <td>
-        <div class="toggle-wrap">
-          <button class="toggle ${on ? 'on' : 'off'}" data-toggle-dominio="${escapeHtml(v.dominio)}" aria-label="Cambiar estado de servicio"></button>
-          <span class="toggle-label ${on ? 'on' : 'off'}">${on ? 'En servicio' : 'En reparación'}</span>
-        </div>
+        <select class="inline-select servicio-select ${servicioEstadoInfo(servicio).badge}" data-servicio-dominio="${escapeHtml(v.dominio)}">
+          ${servicioOptionsHtml(servicio)}
+        </select>
       </td>
       <td>${motivoHtml}</td>
       <td class="cell-dim">${fmtFecha(v.fecha)}</td>
@@ -1180,12 +1204,12 @@ function renderVehiculosTable(){
 }
 
 function bindVehiculoRowEvents(container){
-  container.querySelectorAll('[data-toggle-dominio]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const dom = btn.getAttribute('data-toggle-dominio');
-      const current = getServicio(dom);
-      await setServicio(dom, current === 'en_servicio' ? 'en_reparacion' : 'en_servicio');
-      toast(current === 'en_servicio' ? dom + ' marcado en reparación' : dom + ' marcado en servicio');
+  container.querySelectorAll('[data-servicio-dominio]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const dom = sel.getAttribute('data-servicio-dominio');
+      const nuevoValor = sel.value;
+      await setServicio(dom, nuevoValor);
+      toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
       renderCardsVehiculos();
       renderVehiculos();
     });
@@ -1213,7 +1237,6 @@ function openFichaVehiculo(dom){
   const v = vehiculosEffectiveBase().find(x=>x.dominio===dom);
   if(!v) return;
   const servicio = getServicio(dom);
-  const on = servicio === 'en_servicio';
   const efectivo = vehiculoEfectivamenteHabilitado(v);
   const motivoHtml = (v.estado !== 'Habilitado' && v.motivo) ? `<div class="modal-motivo">⚠️ Motivo de inhabilitación: ${escapeHtml(v.motivo)}</div>` : '';
   openModal(`
@@ -1234,8 +1257,10 @@ function openFichaVehiculo(dom){
       <div class="modal-field"><span class="k">Fecha de control</span><span class="v">${fmtFecha(v.fecha)}</span></div>
       ${motivoHtml}
       <div class="modal-servicio-toggle">
-        <span class="toggle-label ${on ? 'on':'off'}">${on ? 'En servicio' : 'En reparación'}</span>
-        <button class="toggle ${on ? 'on' : 'off'}" id="modalToggleServicio" aria-label="Cambiar estado de servicio"></button>
+        <span class="toggle-label">Servicio</span>
+        <select class="inline-select servicio-select ${servicioEstadoInfo(servicio).badge}" id="modalServicioSelect">
+          ${servicioOptionsHtml(servicio)}
+        </select>
       </div>
     </div>
     <div class="modal-footer">
@@ -1245,10 +1270,10 @@ function openFichaVehiculo(dom){
   `);
   document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
-  document.getElementById('modalToggleServicio').addEventListener('click', async ()=>{
-    const current = getServicio(dom);
-    await setServicio(dom, current === 'en_servicio' ? 'en_reparacion' : 'en_servicio');
-    toast(current === 'en_servicio' ? dom + ' marcado en reparación' : dom + ' marcado en servicio');
+  document.getElementById('modalServicioSelect').addEventListener('change', async (e)=>{
+    const nuevoValor = e.target.value;
+    await setServicio(dom, nuevoValor);
+    toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
     renderCardsVehiculos();
     renderVehiculos();
     openFichaVehiculo(dom);
@@ -1636,34 +1661,28 @@ function todayISO(){
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 function estadoAltaBadge(estado){
-  if(estado==='aprobado') return '<span class="status-pill status-habilitado">Aprobado</span>';
-  if(estado==='rechazado') return '<span class="status-pill status-inhabilitado">Rechazado</span>';
-  return '<span class="status-pill status-suspendido">Pendiente</span>';
+  const info = altaEstadoInfo(estado);
+  return `<span class="status-pill ${info.badge}">${info.label}</span>`;
 }
 
 function renderCardsAltas(){
   const total = altas.length;
-  const pendientes = altas.filter(a=>a.estado==='pendiente').length;
-  const aprobadas = altas.filter(a=>a.estado==='aprobado').length;
-  const rechazadas = altas.filter(a=>a.estado==='rechazado').length;
+  const enProceso = altas.filter(a=>a.estado!=='alta_aprobada').length;
+  const aprobadas = altas.filter(a=>a.estado==='alta_aprobada').length;
   document.getElementById('cardsAltas').innerHTML = `
     <div class="card">
       <div class="label">Total altas cargadas</div>
       <div class="value">${total}</div>
     </div>
     <div class="card accent">
-      <div class="label">Pendientes</div>
-      <div class="value">${pendientes}</div>
-      <div class="sub">A la espera de revisión</div>
+      <div class="label">En proceso</div>
+      <div class="value">${enProceso}</div>
+      <div class="sub">A la espera de completar el flujo</div>
     </div>
     <div class="card green">
       <div class="label">Aprobadas</div>
       <div class="value">${aprobadas}</div>
       <div class="sub">Ya suman en Personal / Vehículos</div>
-    </div>
-    <div class="card red">
-      <div class="label">Rechazadas</div>
-      <div class="value">${rechazadas}</div>
     </div>
   `;
   document.getElementById('badgeAltas').textContent = total;
@@ -1682,9 +1701,7 @@ function altaRowHtml(a){
       <td class="cell-dim">${escapeHtml(a.motivo || '—')}</td>
       <td>
         <select class="inline-select" data-alta-estado="${a.id}">
-          <option value="pendiente" ${a.estado==='pendiente'?'selected':''}>Pendiente</option>
-          <option value="aprobado" ${a.estado==='aprobado'?'selected':''}>Aprobado</option>
-          <option value="rechazado" ${a.estado==='rechazado'?'selected':''}>Rechazado</option>
+          ${altaEstadoOptionsHtml(a.estado)}
         </select>
       </td>
       <td><input type="date" class="inline-date" data-alta-fecha-aprob="${a.id}" value="${a.fechaAprobacion || ''}"></td>
@@ -1719,11 +1736,11 @@ function renderAltasTable(){
       const nuevoEstado = sel.value;
       const prevEstado = a.estado, prevFecha = a.fechaAprobacion;
       a.estado = nuevoEstado;
-      if(nuevoEstado === 'aprobado' && !a.fechaAprobacion){ a.fechaAprobacion = todayISO(); }
+      if(nuevoEstado === 'alta_aprobada' && !a.fechaAprobacion){ a.fechaAprobacion = todayISO(); }
       try{
         const { error } = await supabaseClient.from('altas').update({ estado: a.estado, fecha_aprobacion: a.fechaAprobacion }).eq('id', id);
         if(error) throw error;
-        toast(nuevoEstado === 'aprobado' ? 'Alta aprobada — ya suma en su solapa correspondiente' : 'Estado de alta actualizado');
+        toast(nuevoEstado === 'alta_aprobada' ? 'Alta aprobada — ya suma en su solapa correspondiente' : 'Estado de alta actualizado');
       }catch(err){
         a.estado = prevEstado; a.fechaAprobacion = prevFecha;
         toast('No se pudo guardar: ' + (err.message||err));
@@ -1736,13 +1753,13 @@ function renderAltasTable(){
       const id = inp.getAttribute('data-alta-fecha-aprob');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
-      const prevFecha = a.fechaAprobacion;
+      const prev = a.fechaAprobacion;
       a.fechaAprobacion = inp.value || null;
       try{
         const { error } = await supabaseClient.from('altas').update({ fecha_aprobacion: a.fechaAprobacion }).eq('id', id);
         if(error) throw error;
       }catch(err){
-        a.fechaAprobacion = prevFecha;
+        a.fechaAprobacion = prev;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
@@ -1783,7 +1800,7 @@ function resetFormAlta(){
   document.getElementById('altaModelo').value = '';
   document.getElementById('altaFechaCarga').value = todayISO();
   document.getElementById('altaMotivo').value = '';
-  document.getElementById('altaEstado').value = 'pendiente';
+  document.getElementById('altaEstado').value = 'inicio_alta';
   document.getElementById('altaFechaAprobacion').value = '';
   document.getElementById('altaCamposPersona').style.display = 'grid';
   document.getElementById('altaCamposVehiculo').style.display = 'none';
@@ -1803,17 +1820,15 @@ function initAltasForm(){
     document.getElementById('altaCamposVehiculo').style.display = esPersona ? 'none' : 'grid';
   });
   document.getElementById('altaEstado').addEventListener('change', e=>{
-    if(e.target.value === 'aprobado'){
-      const fa = document.getElementById('altaFechaAprobacion');
-      if(!fa.value) fa.value = todayISO();
-    }
+    const fa = document.getElementById('altaFechaAprobacion');
+    if(!fa.value) fa.value = todayISO();
   });
   document.getElementById('btnGuardarAlta').addEventListener('click', async ()=>{
     const tipo = document.getElementById('altaTipo').value;
     const fechaCarga = document.getElementById('altaFechaCarga').value || todayISO();
     const motivo = document.getElementById('altaMotivo').value.trim();
     const estado = document.getElementById('altaEstado').value;
-    const fechaAprobacion = document.getElementById('altaFechaAprobacion').value || (estado==='aprobado' ? todayISO() : null);
+    const fechaAprobacion = document.getElementById('altaFechaAprobacion').value || (estado==='alta_aprobada' ? todayISO() : null);
 
     const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion };
     if(tipo === 'persona'){
@@ -1839,7 +1854,7 @@ function initAltasForm(){
         fechaCarga: data.fecha_carga, motivo: data.motivo, estado: data.estado, fechaAprobacion: data.fecha_aprobacion,
       });
       document.getElementById('formAltaPanel').style.display = 'none';
-      toast(estado === 'aprobado' ? 'Alta guardada y aprobada' : 'Alta guardada');
+      toast(estado === 'alta_aprobada' ? 'Alta guardada y aprobada' : 'Alta guardada');
       renderAll();
     }catch(err){
       toast('No se pudo guardar la alta: ' + (err.message||err));
@@ -2033,6 +2048,9 @@ function renderAll(){
 
 /* ===================================================================
    CARGA DE DATOS DESDE SUPABASE
+   Todos los que abren el panel ven la misma base. Vehiculos y
+   Personal ya NO se sincronizan automáticamente desde Certronic: se
+   cargan a mano con "Importar Excel", que sube el archivo a Supabase.
 =================================================================== */
 function toDisplayDateStamp(d){
   return d.toLocaleDateString('es-AR', {day:'2-digit', month:'2-digit', year:'numeric'}) +
@@ -2091,6 +2109,7 @@ async function loadData(opts){
       motivo: r.motivo || null,
       fecha: r.fecha || null,
       en_servicio: r.en_servicio !== false,
+      servicio_estado: r.servicio_estado || 'en_servicio',
     }));
     PERSONAL_DATA = pRes.data.map(r => ({
       id: r.id,
@@ -2132,6 +2151,147 @@ async function loadData(opts){
       showError('<strong>No se pudo conectar con Supabase.</strong> Detalle: <code>' + escapeHtml(err.message || String(err)) + '</code>');
     }
   }
+}
+
+/* ---------- Importar Excel (carga manual de Vehiculos y Personal a Supabase) ---------- */
+function normalizarClave(s){
+  return String(s == null ? '' : s)
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function buscarValor(row, candidatos){
+  const claves = {};
+  Object.keys(row).forEach(k => { claves[normalizarClave(k)] = row[k]; });
+  for(const c of candidatos){
+    const v = claves[normalizarClave(c)];
+    if(v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+function excelFechaATexto(v){
+  if(v === '' || v === null || v === undefined) return null;
+  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  if(typeof v === 'number'){
+    const d = XLSX.SSF.parse_date_code(v);
+    if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if(m){
+    let [,dd,mm,yy] = m;
+    if(yy.length===2) yy = '20'+yy;
+    return `${yy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+  }
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  return s || null;
+}
+
+function hojaAJson(workbook, nombresPosibles){
+  const nombreReal = workbook.SheetNames.find(n => nombresPosibles.includes(normalizarClave(n)));
+  if(!nombreReal) return null;
+  return XLSX.utils.sheet_to_json(workbook.Sheets[nombreReal], { defval: '' });
+}
+
+function dedupeByKey(rows, key){
+  const map = new Map();
+  rows.forEach(r => map.set(r[key], r));
+  return Array.from(map.values());
+}
+
+function estadoDesdeTexto(row){
+  const t = buscarValor(row, ['estado','habilitacion','habilitación']).toLowerCase();
+  if(t.startsWith('habil') && !t.includes('no ') && !t.includes('inhab')) return 'Habilitado';
+  if(t.includes('suspend')) return 'Suspendido';
+  if(t.includes('baja')) return 'Baja';
+  return 'No habilitado';
+}
+
+function filasVehiculosARows(filas){
+  const rows = [];
+  filas.forEach(row=>{
+    const dominio = buscarValor(row, ['dominio','patente']).toUpperCase();
+    if(!dominio) return;
+    rows.push({
+      dominio,
+      marca: buscarValor(row, ['marca']) || null,
+      modelo: buscarValor(row, ['modelo']) || null,
+      estado: estadoDesdeTexto(row),
+      motivo: buscarValor(row, ['motivo','motivo de inhabilitacion','motivo de inhabilitación']) || null,
+      fecha: excelFechaATexto(buscarValor(row, ['fecha','fecha de vencimiento','vencimiento'])),
+    });
+  });
+  return dedupeByKey(rows, 'dominio');
+}
+
+function filasPersonalARows(filas){
+  const rows = [];
+  filas.forEach(row=>{
+    const cuil = buscarValor(row, ['cuil']);
+    const apellido = buscarValor(row, ['apellido']);
+    if(!cuil && !apellido) return;
+    rows.push({
+      apellido: apellido || null,
+      nombre: buscarValor(row, ['nombre']) || null,
+      cuil: cuil || null,
+      empresa: buscarValor(row, ['empresa']) || null,
+      funcion: buscarValor(row, ['funcion','función']) || null,
+      estado: estadoDesdeTexto(row),
+      motivo: buscarValor(row, ['motivo','motivo de inhabilitacion','motivo de inhabilitación']) || null,
+      fecha: excelFechaATexto(buscarValor(row, ['fecha','fecha de vencimiento','vencimiento'])),
+    });
+  });
+  return dedupeByKey(rows.filter(r=>r.cuil), 'cuil');
+}
+
+async function procesarArchivoExcel(file){
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try{
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const filasVeh = hojaAJson(wb, ['vehiculos','vehiculo']);
+      const filasPer = hojaAJson(wb, ['personal']);
+      if(!filasVeh && !filasPer){
+        showError('<strong>No se encontraron hojas "VEHICULOS" o "PERSONAL"</strong> en el archivo. Verificá los nombres de las hojas del Excel.');
+        return;
+      }
+      let msg = [];
+      if(filasVeh){
+        const rows = filasVehiculosARows(filasVeh);
+        const { error } = await supabaseClient.from('vehiculos').upsert(rows, { onConflict: 'dominio' });
+        if(error) throw error;
+        msg.push(`Vehículos: ${rows.length} filas importadas`);
+      }
+      if(filasPer){
+        const rows = filasPersonalARows(filasPer);
+        const { error } = await supabaseClient.from('personal').upsert(rows, { onConflict: 'cuil' });
+        if(error) throw error;
+        msg.push(`Personal: ${rows.length} filas importadas`);
+      }
+      toast(msg.join(' — '));
+      await loadData();
+    }catch(err){
+      showError('<strong>No se pudo importar el archivo a Supabase.</strong> Detalle: <code>' + escapeHtml(err.message || String(err)) + '</code>');
+    }
+  };
+  reader.onerror = () => {
+    showError('No se pudo leer el archivo seleccionado.');
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function initImportarExcel(){
+  const input = document.getElementById('inputImportarExcel');
+  const btn = document.getElementById('btnImportarExcel');
+  if(!btn || !input) return;
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if(file) procesarArchivoExcel(file);
+    input.value = '';
+  });
 }
 
 /* ===================================================================
@@ -2201,7 +2361,7 @@ function initVehiculosToolbar(){
     renderVehiculosTable();
   });
   document.getElementById('btnExportarVehiculos').addEventListener('click', ()=>{
-    const list = filteredVehiculos().map(v => ({...v, servicio: getServicio(v.dominio)==='en_servicio' ? 'En servicio' : 'En reparación'}));
+    const list = filteredVehiculos().map(v => ({...v, servicio: servicioEstadoInfo(getServicio(v.dominio)).label}));
     exportCSV(list, ['Dominio','Marca','Modelo','Estado','Servicio','Motivo','Fecha'], ['dominio','marca','modelo','estado','servicio','motivo','fecha'], 'vehiculos_petrosar.csv');
   });
 }
@@ -2234,6 +2394,7 @@ initVehiculosToolbar();
 initPersonalToolbar();
 initAltasForm();
 initRechazosForm();
+initImportarExcel();
 document.getElementById('altaFechaCarga').value = todayISO();
 document.getElementById('rechazoFecha').value = todayISO();
 document.getElementById('rechazoFechaActualizacion').value = todayISO();
