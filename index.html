@@ -440,9 +440,22 @@
   .servicio-select.status-habilitado{background:var(--green-bg);color:var(--green);border-color:var(--green);}
   .servicio-select.status-suspendido{background:var(--amber-bg);color:var(--amber);border-color:var(--amber);}
   .servicio-select.status-inhabilitado{background:var(--red-bg);color:var(--red);border-color:var(--red);}
+  .estado-select{font-weight:700;cursor:pointer;min-width:140px;}
+  .estado-select.status-habilitado{background:var(--green-bg);color:var(--green);border-color:var(--green);}
+  .estado-select.status-suspendido{background:var(--amber-bg);color:var(--amber);border-color:var(--amber);}
+  .estado-select.status-baja{background:var(--red-bg);color:var(--red);border-color:var(--red);}
+  .estado-select.status-inhabilitado{background:var(--red-bg);color:var(--red);border-color:var(--red);}
   .inline-date{
     padding:6px 8px;border-radius:7px;border:1px solid var(--border);
     background:var(--bg);color:var(--text);font-size:0.78rem;font-family:var(--font);
+  }
+  .inline-text{
+    padding:6px 8px;border-radius:7px;border:1px solid var(--border);
+    background:var(--bg);color:var(--text);font-size:0.8rem;font-family:var(--font);
+    width:100%;min-width:70px;box-sizing:border-box;
+  }
+  .inline-text:focus, .inline-date:focus, .inline-select:focus{
+    outline:2px solid var(--accent); outline-offset:1px;
   }
   .file-thumb{width:34px;height:34px;border-radius:6px;object-fit:cover;border:1px solid var(--border);}
   .file-link{
@@ -978,6 +991,85 @@ async function deletePersona(cuil){
   }
 }
 
+/* ---------- Estados de Habilitación (editable en la tabla) ---------- */
+const ESTADO_OPCIONES = ['Habilitado', 'No habilitado', 'Suspendido', 'Baja'];
+function estadoOptionsHtml(selected){
+  const opciones = ESTADO_OPCIONES.includes(selected) ? ESTADO_OPCIONES : [selected || 'Habilitado', ...ESTADO_OPCIONES];
+  return opciones.map(o => `<option value="${escapeHtml(o)}" ${selected===o?'selected':''}>${escapeHtml(o)}</option>`).join('');
+}
+
+/* ---------- Edición inline de campos (vehiculos y personal), guardado en Supabase ---------- */
+async function updateVehiculoField(dominioOriginal, campo, valor){
+  const v = VEHICULOS_DATA.find(x => x.dominio === dominioOriginal);
+  if(!v) return false;
+  const prev = v[campo];
+  v[campo] = valor;
+  try{
+    const payload = {}; payload[campo] = valor;
+    const { error } = await supabaseClient.from('vehiculos').update(payload).eq('dominio', dominioOriginal);
+    if(error) throw error;
+    return true;
+  }catch(err){
+    v[campo] = prev;
+    toast('No se pudo guardar: ' + (err.message||err));
+    return false;
+  }
+}
+async function updateVehiculoDominio(dominioOriginal, nuevoDominioRaw){
+  const nuevoDominio = (nuevoDominioRaw || '').trim().toUpperCase();
+  if(!nuevoDominio || nuevoDominio === dominioOriginal) return false;
+  if(VEHICULOS_DATA.some(x => x.dominio === nuevoDominio)){
+    toast('Ya existe un vehículo con el dominio ' + nuevoDominio);
+    return false;
+  }
+  const v = VEHICULOS_DATA.find(x => x.dominio === dominioOriginal);
+  if(!v) return false;
+  try{
+    const { error } = await supabaseClient.from('vehiculos').update({ dominio: nuevoDominio }).eq('dominio', dominioOriginal);
+    if(error) throw error;
+    v.dominio = nuevoDominio;
+    return true;
+  }catch(err){
+    toast('No se pudo guardar: ' + (err.message||err));
+    return false;
+  }
+}
+async function updatePersonaField(cuilOriginal, campo, valor){
+  const p = PERSONAL_DATA.find(x => x.cuil === cuilOriginal);
+  if(!p) return false;
+  const prev = p[campo];
+  p[campo] = valor;
+  try{
+    const payload = {}; payload[campo] = valor;
+    const { error } = await supabaseClient.from('personal').update(payload).eq('cuil', cuilOriginal);
+    if(error) throw error;
+    return true;
+  }catch(err){
+    p[campo] = prev;
+    toast('No se pudo guardar: ' + (err.message||err));
+    return false;
+  }
+}
+async function updatePersonaCuil(cuilOriginal, nuevoCuilRaw){
+  const nuevoCuil = (nuevoCuilRaw || '').trim();
+  if(!nuevoCuil || nuevoCuil === cuilOriginal) return false;
+  if(PERSONAL_DATA.some(x => x.cuil === nuevoCuil)){
+    toast('Ya existe una persona con el CUIL ' + nuevoCuil);
+    return false;
+  }
+  const p = PERSONAL_DATA.find(x => x.cuil === cuilOriginal);
+  if(!p) return false;
+  try{
+    const { error } = await supabaseClient.from('personal').update({ cuil: nuevoCuil }).eq('cuil', cuilOriginal);
+    if(error) throw error;
+    p.cuil = nuevoCuil;
+    return true;
+  }catch(err){
+    toast('No se pudo guardar: ' + (err.message||err));
+    return false;
+  }
+}
+
 /* ---------- Gestión de Alta (guardado en Supabase) ---------- */
 let altas = [];
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -1143,20 +1235,24 @@ function renderCardsVehiculos(){
 
 function vehiculoRowHtml(v){
   const servicio = getServicio(v.dominio);
-  const motivoHtml = (v.estado !== 'Habilitado' && v.motivo) ? `<span class="motivo-badge">${escapeHtml(v.motivo)}</span>` : `<span class="motivo-empty">—</span>`;
+  const esAlta = !!v._altaId; // vehiculo que entró por una alta aprobada: no tiene fila propia en Supabase todavía
   return `
     <tr data-dominio="${escapeHtml(v.dominio)}">
-      <td class="cell-strong">${escapeHtml(v.dominio)}</td>
-      <td>${escapeHtml(v.marca)}</td>
-      <td>${escapeHtml(v.modelo)}</td>
-      <td><span class="status-pill ${statusClass(v.estado)}">${escapeHtml(v.estado)}</span></td>
+      <td class="cell-strong"><input type="text" class="inline-text" data-campo="dominio" data-dominio="${escapeHtml(v.dominio)}" value="${escapeHtml(v.dominio)}" ${esAlta?'disabled title="Viene de una alta aprobada"':''}></td>
+      <td><input type="text" class="inline-text" data-campo="marca" data-dominio="${escapeHtml(v.dominio)}" value="${escapeHtml(v.marca||'')}" ${esAlta?'disabled':''}></td>
+      <td><input type="text" class="inline-text" data-campo="modelo" data-dominio="${escapeHtml(v.dominio)}" value="${escapeHtml(v.modelo||'')}" ${esAlta?'disabled':''}></td>
       <td>
-        <select class="inline-select servicio-select ${servicioEstadoInfo(servicio).badge}" data-servicio-dominio="${escapeHtml(v.dominio)}">
+        <select class="inline-select estado-select ${statusClass(v.estado)}" data-campo="estado" data-dominio="${escapeHtml(v.dominio)}" ${esAlta?'disabled':''}>
+          ${estadoOptionsHtml(v.estado)}
+        </select>
+      </td>
+      <td>
+        <select class="inline-select servicio-select ${servicioEstadoInfo(servicio).badge}" data-servicio-dominio="${escapeHtml(v.dominio)}" ${esAlta?'disabled':''}>
           ${servicioOptionsHtml(servicio)}
         </select>
       </td>
-      <td>${motivoHtml}</td>
-      <td class="cell-dim">${fmtFecha(v.fecha)}</td>
+      <td><input type="text" class="inline-text" data-campo="motivo" data-dominio="${escapeHtml(v.dominio)}" value="${escapeHtml(v.motivo||'')}" placeholder="—" ${esAlta?'disabled':''}></td>
+      <td><input type="date" class="inline-date" data-campo="fecha" data-dominio="${escapeHtml(v.dominio)}" value="${v.fecha||''}" ${esAlta?'disabled':''}></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-ficha-dominio="${escapeHtml(v.dominio)}">Ver ficha</button>
@@ -1210,6 +1306,38 @@ function bindVehiculoRowEvents(container){
       const nuevoValor = sel.value;
       await setServicio(dom, nuevoValor);
       toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
+      renderCardsVehiculos();
+      renderVehiculos();
+    });
+  });
+  container.querySelectorAll('select[data-campo="estado"]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const dom = sel.getAttribute('data-dominio');
+      const nuevoEstado = sel.value;
+      const ok = await updateVehiculoField(dom, 'estado', nuevoEstado);
+      if(ok){
+        toast(dom + ': ' + nuevoEstado);
+        populateVehiculosFilters();
+      }
+      renderCardsVehiculos();
+      renderVehiculos();
+    });
+  });
+  container.querySelectorAll('input[data-campo]').forEach(inp=>{
+    inp.addEventListener('change', async ()=>{
+      const campo = inp.getAttribute('data-campo');
+      const dom = inp.getAttribute('data-dominio');
+      if(campo === 'dominio'){
+        const nuevoValor = inp.value;
+        const ok = await updateVehiculoDominio(dom, nuevoValor);
+        if(ok){ toast('Dominio actualizado'); populateVehiculosFilters(); }
+        renderCardsVehiculos();
+        renderVehiculos();
+        return;
+      }
+      let valor = campo === 'fecha' ? (inp.value || null) : (inp.value.trim() || (campo==='motivo' ? null : ''));
+      const ok = await updateVehiculoField(dom, campo, valor);
+      if(ok){ toast('Guardado'); populateVehiculosFilters(); }
       renderCardsVehiculos();
       renderVehiculos();
     });
@@ -1446,17 +1574,21 @@ function renderCardsPersonal(){
 }
 
 function personaRowHtml(p){
-  const motivoHtml = (p.estado !== 'Habilitado' && p.motivo) ? `<span class="motivo-badge">${escapeHtml(p.motivo)}</span>` : `<span class="motivo-empty">—</span>`;
+  const esAlta = !!p._altaId; // persona que entró por una alta aprobada: no tiene fila propia en Supabase todavía
   return `
     <tr data-cuil="${escapeHtml(p.cuil)}">
-      <td class="cell-strong">${escapeHtml(p.apellido)}</td>
-      <td>${escapeHtml(p.nombre)}</td>
-      <td class="cell-dim">${escapeHtml(p.cuil)}</td>
-      <td>${escapeHtml(p.empresa)}</td>
-      <td>${escapeHtml(p.funcion)}</td>
-      <td><span class="status-pill ${statusClass(p.estado)}">${escapeHtml(p.estado)}</span></td>
-      <td>${motivoHtml}</td>
-      <td class="cell-dim">${fmtFecha(p.fecha)}</td>
+      <td class="cell-strong"><input type="text" class="inline-text" data-campo="apellido" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.apellido||'')}" ${esAlta?'disabled':''}></td>
+      <td><input type="text" class="inline-text" data-campo="nombre" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.nombre||'')}" ${esAlta?'disabled':''}></td>
+      <td><input type="text" class="inline-text" data-campo="cuil" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.cuil||'')}" ${esAlta?'disabled title="Viene de una alta aprobada"':''}></td>
+      <td><input type="text" class="inline-text" data-campo="empresa" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.empresa||'')}" ${esAlta?'disabled':''}></td>
+      <td><input type="text" class="inline-text" data-campo="funcion" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.funcion||'')}" ${esAlta?'disabled':''}></td>
+      <td>
+        <select class="inline-select estado-select ${statusClass(p.estado)}" data-campo="estado" data-cuil="${escapeHtml(p.cuil)}" ${esAlta?'disabled':''}>
+          ${estadoOptionsHtml(p.estado)}
+        </select>
+      </td>
+      <td><input type="text" class="inline-text" data-campo="motivo" data-cuil="${escapeHtml(p.cuil)}" value="${escapeHtml(p.motivo||'')}" placeholder="—" ${esAlta?'disabled':''}></td>
+      <td><input type="date" class="inline-date" data-campo="fecha" data-cuil="${escapeHtml(p.cuil)}" value="${p.fecha||''}" ${esAlta?'disabled':''}></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-ficha-cuil="${escapeHtml(p.cuil)}">Ver ficha</button>
@@ -1470,6 +1602,38 @@ function personaRowHtml(p){
 }
 
 function bindPersonaRowEvents(container){
+  container.querySelectorAll('select[data-campo="estado"]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const cuil = sel.getAttribute('data-cuil');
+      const nuevoEstado = sel.value;
+      const ok = await updatePersonaField(cuil, 'estado', nuevoEstado);
+      if(ok){
+        toast(cuil + ': ' + nuevoEstado);
+        populatePersonalFilters();
+      }
+      renderCardsPersonal();
+      renderPersonal();
+    });
+  });
+  container.querySelectorAll('input[data-campo]').forEach(inp=>{
+    inp.addEventListener('change', async ()=>{
+      const campo = inp.getAttribute('data-campo');
+      const cuil = inp.getAttribute('data-cuil');
+      if(campo === 'cuil'){
+        const nuevoValor = inp.value;
+        const ok = await updatePersonaCuil(cuil, nuevoValor);
+        if(ok){ toast('CUIL actualizado'); populatePersonalFilters(); }
+        renderCardsPersonal();
+        renderPersonal();
+        return;
+      }
+      let valor = campo === 'fecha' ? (inp.value || null) : (inp.value.trim() || (campo==='motivo' ? null : ''));
+      const ok = await updatePersonaField(cuil, campo, valor);
+      if(ok){ toast('Guardado'); populatePersonalFilters(); }
+      renderCardsPersonal();
+      renderPersonal();
+    });
+  });
   container.querySelectorAll('[data-ficha-cuil]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       openFichaPersona(btn.getAttribute('data-ficha-cuil'));
