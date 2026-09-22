@@ -354,13 +354,20 @@
     padding:20px;z-index:100;opacity:0;pointer-events:none;transition:opacity .18s ease;
   }
   .modal-overlay.show{opacity:1;pointer-events:auto;}
+  .modal-overlay.full-active{padding:0;}
   .modal-card{
     background:var(--card);border:1px solid var(--border);border-radius:16px;
     width:100%;max-width:460px;max-height:88vh;overflow-y:auto;
     box-shadow:0 20px 60px rgba(0,0,0,0.35);
     transform:translateY(12px);transition:transform .18s ease;
+    display:flex;flex-direction:column;
   }
   .modal-card.wide{max-width:min(1180px, 96vw);}
+  .modal-card.full{
+    max-width:100vw;width:100vw;max-height:100vh;height:100vh;
+    border-radius:0;border:none;
+  }
+  .modal-card.full .historial-table-wrap{flex:1;max-height:none;}
   .modal-overlay.show .modal-card{transform:translateY(0);}
   .historial-toolbar{
     display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -1212,11 +1219,15 @@ function toast(msg){
   toast._tm = setTimeout(()=>t.classList.remove('show'), 2200);
 }
 
-function openModal(html, wide){
+function openModal(html, size){
+  // size: undefined/false = chico (ficha), 'wide' = ancho, 'full' = pantalla completa
   const card = document.getElementById('modalCard');
+  const overlay = document.getElementById('modalOverlay');
   card.innerHTML = html;
-  card.classList.toggle('wide', !!wide);
-  document.getElementById('modalOverlay').classList.add('show');
+  card.classList.toggle('wide', size === 'wide' || size === true);
+  card.classList.toggle('full', size === 'full');
+  overlay.classList.toggle('full-active', size === 'full');
+  overlay.classList.add('show');
 }
 function closeModal(){
   document.getElementById('modalOverlay').classList.remove('show');
@@ -2144,7 +2155,7 @@ function abrirHistorialGeneral(){
     <div class="modal-footer">
       <button id="modalCloseBtn2">Cerrar</button>
     </div>
-  `, true);
+  `, 'full');
   document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
   document.getElementById('buscarHistorialGeneral').addEventListener('input', renderTabla);
