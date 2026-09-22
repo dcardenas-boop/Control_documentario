@@ -796,7 +796,7 @@
           </select>
         </div>
         <div class="form-field">
-          <label>Fecha de este estado</label>
+          <label>Vigente desde</label>
           <input type="date" id="altaFechaAprobacion">
         </div>
       </div>
@@ -822,7 +822,8 @@
               <th>Fecha de carga</th>
               <th>Motivo</th>
               <th>Estado</th>
-              <th>Fecha de este estado</th>
+              <th>Vigente desde</th>
+              <th>Vigente hasta</th>
               <th>Acción</th>
             </tr>
           </thead>
@@ -936,6 +937,35 @@ function altaEstadoInfo(value){
 }
 function altaEstadoOptionsHtml(selected){
   return ALTA_ESTADOS.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
+}
+
+/* ---------- Historial de estados de una alta (desde/hasta), para
+   poder hacer seguimiento de cada etapa. Se guarda en la columna
+   jsonb "historial" de la tabla altas. ---------- */
+function altaHistorialEtapaActual(a){
+  const h = a.historial || [];
+  return h.length ? h[h.length - 1] : null;
+}
+// Cierra la etapa vigente (si no tenía ya un "hasta" cargado a mano) y
+// abre una etapa nueva con el estado indicado.
+function altaHistorialAbrirEtapa(a, nuevoEstado, desde){
+  if(!a.historial) a.historial = [];
+  const actual = altaHistorialEtapaActual(a);
+  if(actual && !actual.hasta){ actual.hasta = desde; }
+  a.historial.push({ estado: nuevoEstado, desde: desde || todayISO(), hasta: null });
+}
+// Alta recién creada: arranca su historial con la etapa elegida en el form.
+function altaHistorialInicializar(a){
+  a.historial = [{ estado: a.estado, desde: a.fechaAprobacion || a.fechaCarga || todayISO(), hasta: null }];
+}
+function altaHistorialModalHtml(a){
+  const h = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
+  return h.slice().reverse().map(e => `
+    <div class="modal-field">
+      <span class="k">${escapeHtml(altaEstadoInfo(e.estado).label)}</span>
+      <span class="v">${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}</span>
+    </div>
+  `).join('');
 }
 
 // Estados de servicio de Vehiculos (tres opciones).
@@ -1145,6 +1175,14 @@ async function migrarAltasAprobadasSinFila(){
   for(const a of faltantes){
     await crearFilaDesdeAlta(a);
   }
+}
+
+// Guarda estado + fecha_aprobacion + historial completo de una alta en Supabase.
+async function guardarHistorialAlta(a){
+  const { error } = await supabaseClient.from('altas')
+    .update({ estado: a.estado, fecha_aprobacion: a.fechaAprobacion, historial: a.historial || [] })
+    .eq('id', a.id);
+  if(error) throw error;
 }
 
 /* ---------- Rechazos en acceso a yacimiento (guardado en Supabase) ---------- */
@@ -1839,21 +1877,18 @@ function renderPersonalPorMes(){
   const countEl = document.getElementById('countMesPersonal');
   const tbody = document.getElementById('tbodyMesPersonal');
   const empty = document.getElementById('emptyMesPersonal');
-  if(!perState.mes){
-    titulo.textContent = 'Seleccioná un mes';
-    countEl.textContent = '';
-    tbody.innerHTML = '';
-    empty.style.display = 'block';
-    empty.textContent = 'Elegí un mes arriba para ver el detalle.';
-    return;
-  }
-  const list = filteredPersonal().filter(p => monthKey(p.fecha) === perState.mes);
-  titulo.textContent = 'Personal — ' + monthLabel(perState.mes);
+  // Se muestra SIEMPRE todo el personal (no solo el que vence en el mes
+  // elegido), para poder revisar y cargar el estado de habilitación de
+  // cualquiera desde acá. El selector de mes de arriba queda como
+  // referencia de vencimientos (ver los chips "Total del mes / Habilitados
+  // / No habilitados"), pero ya no filtra esta lista.
+  const list = filteredPersonal();
+  titulo.textContent = perState.mes ? ('Personal — todos (referencia: vencimientos de ' + monthLabel(perState.mes) + ')') : 'Personal — todos';
   countEl.textContent = list.length + ' registro' + (list.length===1?'':'s');
   if(list.length === 0){
     tbody.innerHTML = '';
     empty.style.display = 'block';
-    empty.textContent = 'No hay personal con vencimiento en este mes para el filtro actual.';
+    empty.textContent = 'No hay personal cargado todavía.';
   } else {
     empty.style.display = 'none';
     tbody.innerHTML = list.map(personaRowHtml).join('');
@@ -1912,6 +1947,9 @@ function altaRowHtml(a){
   const esPersona = a.tipo === 'persona';
   const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
   const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
+  const etapa = altaHistorialEtapaActual(a);
+  const vigenteDesde = etapa ? etapa.desde : (a.fechaAprobacion || a.fechaCarga);
+  const vigenteHasta = etapa ? etapa.hasta : null;
   return `
     <tr data-alta-id="${a.id}">
       <td><span class="tipo-badge">${esPersona ? '👤 Persona' : '🚚 Vehículo'}</span></td>
@@ -1924,9 +1962,11 @@ function altaRowHtml(a){
           ${altaEstadoOptionsHtml(a.estado)}
         </select>
       </td>
-      <td><input type="date" class="inline-date" data-alta-fecha-aprob="${a.id}" value="${a.fechaAprobacion || ''}"></td>
+      <td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>
+      <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}"></td>
       <td>
         <div class="action-cell">
+          <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
           <button class="btn-trash" title="Eliminar alta" data-alta-delete="${a.id}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
           </button>
@@ -1934,6 +1974,28 @@ function altaRowHtml(a){
       </td>
     </tr>
   `;
+}
+
+function abrirHistorialAlta(a){
+  const esPersona = a.tipo === 'persona';
+  const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <p class="modal-head-title">Historial de la alta</p>
+        <p class="modal-head-name">${escapeHtml(identificacion)}</p>
+      </div>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-body">
+      ${altaHistorialModalHtml(a)}
+    </div>
+    <div class="modal-footer">
+      <button id="modalCloseBtn2">Cerrar</button>
+    </div>
+  `);
+  document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
+  document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
 }
 
 function renderAltasTable(){
@@ -1955,11 +2017,13 @@ function renderAltasTable(){
       if(!a) return;
       const nuevoEstado = sel.value;
       const prevEstado = a.estado, prevFecha = a.fechaAprobacion;
+      const prevHistorial = JSON.parse(JSON.stringify(a.historial || []));
       a.estado = nuevoEstado;
-      if(nuevoEstado === 'alta_aprobada' && !a.fechaAprobacion){ a.fechaAprobacion = todayISO(); }
+      if(!a.historial || !a.historial.length) altaHistorialInicializar(a);
+      else altaHistorialAbrirEtapa(a, nuevoEstado, todayISO());
+      if(nuevoEstado === 'alta_aprobada'){ a.fechaAprobacion = altaHistorialEtapaActual(a).desde; }
       try{
-        const { error } = await supabaseClient.from('altas').update({ estado: a.estado, fecha_aprobacion: a.fechaAprobacion }).eq('id', id);
-        if(error) throw error;
+        await guardarHistorialAlta(a);
         if(nuevoEstado === 'alta_aprobada'){
           await crearFilaDesdeAlta(a);
           toast('Alta aprobada — ya tiene su propio registro editable en su solapa');
@@ -1967,27 +2031,57 @@ function renderAltasTable(){
           toast('Estado de alta actualizado');
         }
       }catch(err){
-        a.estado = prevEstado; a.fechaAprobacion = prevFecha;
+        a.estado = prevEstado; a.fechaAprobacion = prevFecha; a.historial = prevHistorial;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
     });
   });
-  tbody.querySelectorAll('[data-alta-fecha-aprob]').forEach(inp=>{
+  tbody.querySelectorAll('[data-alta-desde]').forEach(inp=>{
     inp.addEventListener('change', async ()=>{
-      const id = inp.getAttribute('data-alta-fecha-aprob');
+      const id = inp.getAttribute('data-alta-desde');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
-      const prev = a.fechaAprobacion;
-      a.fechaAprobacion = inp.value || null;
+      if(!a.historial || !a.historial.length) altaHistorialInicializar(a);
+      const etapa = altaHistorialEtapaActual(a);
+      const prev = etapa.desde;
+      const prevFecha = a.fechaAprobacion;
+      etapa.desde = inp.value || null;
+      if(a.estado === 'alta_aprobada') a.fechaAprobacion = etapa.desde;
       try{
-        const { error } = await supabaseClient.from('altas').update({ fecha_aprobacion: a.fechaAprobacion }).eq('id', id);
-        if(error) throw error;
+        await guardarHistorialAlta(a);
+        toast('Fecha guardada');
       }catch(err){
-        a.fechaAprobacion = prev;
+        etapa.desde = prev; a.fechaAprobacion = prevFecha;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
+    });
+  });
+  tbody.querySelectorAll('[data-alta-hasta]').forEach(inp=>{
+    inp.addEventListener('change', async ()=>{
+      const id = inp.getAttribute('data-alta-hasta');
+      const a = altas.find(x=>x.id===id);
+      if(!a) return;
+      if(!a.historial || !a.historial.length) altaHistorialInicializar(a);
+      const etapa = altaHistorialEtapaActual(a);
+      const prev = etapa.hasta;
+      etapa.hasta = inp.value || null;
+      try{
+        await guardarHistorialAlta(a);
+        toast('Fecha guardada');
+      }catch(err){
+        etapa.hasta = prev;
+        toast('No se pudo guardar: ' + (err.message||err));
+      }
+      renderAll();
+    });
+  });
+  tbody.querySelectorAll('[data-alta-historial]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.getAttribute('data-alta-historial');
+      const a = altas.find(x=>x.id===id);
+      if(a) abrirHistorialAlta(a);
     });
   });
   tbody.querySelectorAll('[data-alta-delete]').forEach(btn=>{
@@ -2055,7 +2149,8 @@ function initAltasForm(){
     const estado = document.getElementById('altaEstado').value;
     const fechaAprobacion = document.getElementById('altaFechaAprobacion').value || (estado==='alta_aprobada' ? todayISO() : null);
 
-    const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion };
+    const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion,
+      historial: [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }] };
     if(tipo === 'persona'){
       a.apellido = document.getElementById('altaApellido').value.trim();
       a.nombre = document.getElementById('altaNombre').value.trim();
@@ -2077,6 +2172,7 @@ function initAltasForm(){
         id: data.id, tipo: data.tipo, apellido: data.apellido, nombre: data.nombre, cuil: data.cuil,
         empresa: data.empresa, funcion: data.funcion, dominio: data.dominio, marca: data.marca, modelo: data.modelo,
         fechaCarga: data.fecha_carga, motivo: data.motivo, estado: data.estado, fechaAprobacion: data.fecha_aprobacion,
+        historial: data.historial || [],
       };
       altas.push(nueva);
       if(nueva.estado === 'alta_aprobada'){
@@ -2357,6 +2453,7 @@ async function loadData(opts){
       id: a.id, tipo: a.tipo, apellido: a.apellido, nombre: a.nombre, cuil: a.cuil,
       empresa: a.empresa, funcion: a.funcion, dominio: a.dominio, marca: a.marca, modelo: a.modelo,
       fechaCarga: a.fecha_carga, motivo: a.motivo, estado: a.estado, fechaAprobacion: a.fecha_aprobacion,
+      historial: a.historial || [],
     }));
     rechazos = rRes.data.map(r => ({
       id: r.id, identificacion: r.identificacion, empresa: r.empresa,
@@ -2373,6 +2470,16 @@ async function loadData(opts){
     // tienen fila propia en vehiculos/personal: se las crea ahora para
     // que pasen a ser editables como cualquier otro registro.
     await migrarAltasAprobadasSinFila();
+
+    // Altas cargadas antes de tener historial: se les arma un historial
+    // inicial de una sola etapa (la actual), para que "Vigente desde" y
+    // el botón "Historial" tengan algo para mostrar.
+    for(const a of altas){
+      if(!a.historial || !a.historial.length){
+        altaHistorialInicializar(a);
+        try{ await guardarHistorialAlta(a); }catch(err){ /* se reintenta en el próximo refresco */ }
+      }
+    }
 
     hideError();
     populateVehiculosFilters();
