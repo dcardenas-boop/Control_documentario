@@ -748,6 +748,7 @@
 
     <div class="toolbar">
       <button class="primary" id="btnNuevaAlta">+ Nueva alta</button>
+      <button id="btnHistorialGeneral">📋 Ver historial general</button>
     </div>
 
     <div class="form-panel" id="formAltaPanel" style="display:none;">
@@ -1998,6 +1999,63 @@ function abrirHistorialAlta(a){
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
 }
 
+// Junta el historial de TODAS las altas en una sola lista, para el
+// historial general de la solapa (quién pasó por qué etapa y cuándo).
+function historialGeneralFilas(){
+  const filas = [];
+  altas.forEach(a=>{
+    const esPersona = a.tipo === 'persona';
+    const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
+    const etapas = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
+    etapas.forEach(e=>{
+      filas.push({ tipo: a.tipo, identificacion, estado: e.estado, desde: e.desde, hasta: e.hasta });
+    });
+  });
+  filas.sort((x,y) => (y.desde || '').localeCompare(x.desde || ''));
+  return filas;
+}
+
+function abrirHistorialGeneral(){
+  const filas = historialGeneralFilas();
+  const cuerpo = filas.length ? filas.map(f => `
+    <tr>
+      <td>${f.tipo === 'persona' ? '👤' : '🚚'}</td>
+      <td class="cell-strong">${escapeHtml(f.identificacion)}</td>
+      <td><span class="status-pill ${altaEstadoInfo(f.estado).badge}">${escapeHtml(altaEstadoInfo(f.estado).label)}</span></td>
+      <td class="cell-dim">${fmtFecha(f.desde)}</td>
+      <td class="cell-dim">${f.hasta ? fmtFecha(f.hasta) : 'Actualidad'}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim);">Todavía no hay historial cargado.</td></tr>';
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <p class="modal-head-title">Historial general — Gestión de Alta</p>
+        <p class="modal-head-name">${filas.length} etapa${filas.length===1?'':'s'} registrada${filas.length===1?'':'s'}, de todas las altas</p>
+      </div>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Tipo</th>
+            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Identificación</th>
+            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Etapa</th>
+            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Desde</th>
+            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Hasta</th>
+          </tr>
+        </thead>
+        <tbody>${cuerpo}</tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button id="modalCloseBtn2">Cerrar</button>
+    </div>
+  `);
+  document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
+  document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
+}
+
 function renderAltasTable(){
   const list = altas.slice().sort((a,b)=> (b.fechaCarga||'').localeCompare(a.fechaCarga||''));
   document.getElementById('countAltas').textContent = list.length + ' registro' + (list.length===1?'':'s');
@@ -2130,6 +2188,7 @@ function initAltasForm(){
     resetFormAlta();
     document.getElementById('formAltaPanel').style.display = 'block';
   });
+  document.getElementById('btnHistorialGeneral').addEventListener('click', abrirHistorialGeneral);
   document.getElementById('btnCancelarAlta').addEventListener('click', ()=>{
     document.getElementById('formAltaPanel').style.display = 'none';
   });
