@@ -360,7 +360,22 @@
     box-shadow:0 20px 60px rgba(0,0,0,0.35);
     transform:translateY(12px);transition:transform .18s ease;
   }
+  .modal-card.wide{max-width:min(1180px, 96vw);}
   .modal-overlay.show .modal-card{transform:translateY(0);}
+  .historial-toolbar{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:14px 22px;border-bottom:1px solid var(--border);flex-wrap:wrap;
+  }
+  .historial-count{font-size:0.85rem;color:var(--text-dim);}
+  .historial-table-wrap{max-height:60vh;overflow-y:auto;}
+  .historial-table{width:100%;border-collapse:collapse;font-size:0.86rem;}
+  .historial-table th{
+    text-align:left;padding:12px 22px;font-size:0.72rem;text-transform:uppercase;
+    letter-spacing:0.04em;color:var(--text-dim);border-bottom:2px solid var(--border);
+    white-space:nowrap;position:sticky;top:0;background:var(--card);
+  }
+  .historial-table td{padding:12px 22px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .historial-table tbody tr:hover td{background:var(--bg);}
   .modal-head{
     padding:20px 22px 14px;border-bottom:1px solid var(--border);
     display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
@@ -1197,8 +1212,10 @@ function toast(msg){
   toast._tm = setTimeout(()=>t.classList.remove('show'), 2200);
 }
 
-function openModal(html){
-  document.getElementById('modalCard').innerHTML = html;
+function openModal(html, wide){
+  const card = document.getElementById('modalCard');
+  card.innerHTML = html;
+  card.classList.toggle('wide', !!wide);
   document.getElementById('modalOverlay').classList.add('show');
 }
 function closeModal(){
@@ -1598,6 +1615,19 @@ function renderVehiculos(){
     document.getElementById('vehiculosPorMes').style.display='block';
     renderVehiculosPorMes();
   }
+}
+
+function exportXLSX(rows, headers, keys, filename, sheetName){
+  const data = rows.map(r => {
+    const obj = {};
+    keys.forEach((k,i) => { obj[headers[i]] = (r[k] === null || r[k] === undefined) ? '' : r[k]; });
+    return obj;
+  });
+  const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Datos');
+  XLSX.writeFile(wb, filename);
 }
 
 function exportCSV(rows, headers, keys, filename){
@@ -2006,54 +2036,121 @@ function historialGeneralFilas(){
   altas.forEach(a=>{
     const esPersona = a.tipo === 'persona';
     const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
+    const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
     const etapas = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
     etapas.forEach(e=>{
-      filas.push({ tipo: a.tipo, identificacion, estado: e.estado, desde: e.desde, hasta: e.hasta });
+      filas.push({
+        tipo: a.tipo, identificacion, datos, motivo: a.motivo, estado: e.estado, desde: e.desde, hasta: e.hasta,
+        dominio: a.dominio || '', cuil: a.cuil || '',
+      });
     });
   });
   filas.sort((x,y) => (y.desde || '').localeCompare(x.desde || ''));
   return filas;
 }
 
-function abrirHistorialGeneral(){
-  const filas = historialGeneralFilas();
-  const cuerpo = filas.length ? filas.map(f => `
+function historialGeneralFiltrar(filas, busqueda, etapa){
+  const q = (busqueda || '').trim().toLowerCase();
+  return filas.filter(f=>{
+    if(etapa && f.estado !== etapa) return false;
+    if(q){
+      const bolsa = [f.identificacion, f.dominio, f.cuil, f.datos].join(' ').toLowerCase();
+      if(!bolsa.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function historialGeneralFilaHtml(f){
+  return `
     <tr>
-      <td>${f.tipo === 'persona' ? '👤' : '🚚'}</td>
+      <td>${f.tipo === 'persona' ? '👤 Persona' : '🚚 Vehículo'}</td>
       <td class="cell-strong">${escapeHtml(f.identificacion)}</td>
+      <td class="cell-dim">${escapeHtml(f.datos || '—')}</td>
+      <td class="cell-dim">${escapeHtml(f.motivo || '—')}</td>
       <td><span class="status-pill ${altaEstadoInfo(f.estado).badge}">${escapeHtml(altaEstadoInfo(f.estado).label)}</span></td>
       <td class="cell-dim">${fmtFecha(f.desde)}</td>
       <td class="cell-dim">${f.hasta ? fmtFecha(f.hasta) : 'Actualidad'}</td>
     </tr>
-  `).join('') : '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim);">Todavía no hay historial cargado.</td></tr>';
+  `;
+}
+
+function descargarHistorialGeneral(filas){
+  const rows = filas.map(f => ({
+    tipo: f.tipo === 'persona' ? 'Persona' : 'Vehículo',
+    identificacion: f.identificacion,
+    datos: f.datos || '',
+    motivo: f.motivo || '',
+    etapa: altaEstadoInfo(f.estado).label,
+    desde: fmtFecha(f.desde),
+    hasta: f.hasta ? fmtFecha(f.hasta) : 'Actualidad',
+  }));
+  exportXLSX(
+    rows,
+    ['Tipo', 'Identificación', 'Datos', 'Motivo', 'Etapa', 'Desde', 'Hasta'],
+    ['tipo', 'identificacion', 'datos', 'motivo', 'etapa', 'desde', 'hasta'],
+    'historial_general_altas_petrosar.xlsx',
+    'Historial altas'
+  );
+}
+
+function abrirHistorialGeneral(){
+  const todas = historialGeneralFilas();
+
+  const renderTabla = () => {
+    const busqueda = document.getElementById('buscarHistorialGeneral').value;
+    const etapa = document.getElementById('filtroEtapaHistorialGeneral').value;
+    const filas = historialGeneralFiltrar(todas, busqueda, etapa);
+    document.getElementById('tbodyHistorialGeneral').innerHTML = filas.length
+      ? filas.map(historialGeneralFilaHtml).join('')
+      : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-dim);">No hay registros para este filtro.</td></tr>';
+    document.getElementById('historialGeneralCount').textContent = filas.length + ' de ' + todas.length + ' registro' + (todas.length===1?'':'s');
+    return filas;
+  };
+
   openModal(`
     <div class="modal-head">
       <div>
         <p class="modal-head-title">Historial general — Gestión de Alta</p>
-        <p class="modal-head-name">${filas.length} etapa${filas.length===1?'':'s'} registrada${filas.length===1?'':'s'}, de todas las altas</p>
+        <p class="modal-head-name">${todas.length} etapa${todas.length===1?'':'s'} registrada${todas.length===1?'':'s'}, de todas las altas</p>
       </div>
       <button class="modal-close" id="modalCloseBtn">✕</button>
     </div>
-    <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
-      <table style="width:100%;border-collapse:collapse;">
+    <div class="historial-toolbar">
+      <input type="text" class="inline-text" id="buscarHistorialGeneral" placeholder="Buscar por interno, legajo (CUIL) o nombre..." style="max-width:320px;">
+      <select class="inline-select" id="filtroEtapaHistorialGeneral">
+        <option value="">Todas las etapas</option>
+        ${altaEstadoOptionsHtml('')}
+      </select>
+      <span class="historial-count" id="historialGeneralCount"></span>
+      <button class="primary" id="btnDescargarHistorialGeneral">⬇️ Descargar Excel</button>
+    </div>
+    <div class="historial-table-wrap">
+      <table class="historial-table">
         <thead>
           <tr>
-            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Tipo</th>
-            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Identificación</th>
-            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Etapa</th>
-            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Desde</th>
-            <th style="text-align:left;padding:6px 8px;font-size:0.75rem;color:var(--text-dim);">Hasta</th>
+            <th>Tipo</th>
+            <th>Identificación</th>
+            <th>Datos</th>
+            <th>Motivo</th>
+            <th>Etapa</th>
+            <th>Desde</th>
+            <th>Hasta</th>
           </tr>
         </thead>
-        <tbody>${cuerpo}</tbody>
+        <tbody id="tbodyHistorialGeneral"></tbody>
       </table>
     </div>
     <div class="modal-footer">
       <button id="modalCloseBtn2">Cerrar</button>
     </div>
-  `);
+  `, true);
   document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
+  document.getElementById('buscarHistorialGeneral').addEventListener('input', renderTabla);
+  document.getElementById('filtroEtapaHistorialGeneral').addEventListener('change', renderTabla);
+  document.getElementById('btnDescargarHistorialGeneral').addEventListener('click', () => descargarHistorialGeneral(renderTabla()));
+  renderTabla();
 }
 
 function renderAltasTable(){
