@@ -1075,7 +1075,15 @@ function altaHistorialInicializar(a){
 function altaHistorialModalHtml(a){
   altaHistorialNormalizar(a);
   const h = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
-  return h.slice().reverse().map(e => `
+  // De la fecha más vieja para abajo (orden cronológico), igual que se va
+  // completando en el panel. Si dos etapas tienen la misma fecha, se
+  // ordenan como aparecen las columnas del panel (Estado, después Estado PAE).
+  const ordenIndice = e => ALTA_ESTADOS.findIndex(x => x.value === e.estado);
+  const ordenado = h.slice().sort((x,y) => {
+    const porFecha = (x.desde || '').localeCompare(y.desde || '');
+    return porFecha !== 0 ? porFecha : ordenIndice(x) - ordenIndice(y);
+  });
+  return ordenado.map(e => `
     <div class="modal-field">
       <span class="k">${escapeHtml(altaEstadoInfo(e.estado).label)}</span>
       <span class="v">${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}</span>
