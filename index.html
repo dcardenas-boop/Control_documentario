@@ -813,8 +813,6 @@
           <label>Estado</label>
           <select id="altaEstado">
             <option value="inicio_alta">Inicio de alta</option>
-            <option value="pae_control_documentario">Pendiente de auditoría PAE - Control documentario</option>
-            <option value="pae_relaciones_laborales">Pendiente de auditoría PAE - Relaciones laborales</option>
             <option value="carga_documentacion">Carga de documentación</option>
             <option value="alta_aprobada">Alta aprobada</option>
           </select>
@@ -822,6 +820,18 @@
         <div class="form-field">
           <label>Vigente desde</label>
           <input type="date" id="altaFechaAprobacion">
+        </div>
+        <div class="form-field">
+          <label>Estado PAE</label>
+          <select id="altaEstadoPae">
+            <option value="">— Sin auditoría PAE —</option>
+            <option value="pae_control_documentario">Pendiente de auditoría PAE - Control documentario</option>
+            <option value="pae_relaciones_laborales">Pendiente de auditoría PAE - Relaciones laborales</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Vigente hasta</label>
+          <input type="date" id="altaPaeHasta">
         </div>
       </div>
 
@@ -833,8 +843,8 @@
 
     <div class="table-panel">
       <div class="table-panel-head">
-        <h3>Inicio de alta / Carga de documentación / Alta aprobada</h3>
-        <span class="count" id="countAltasDesde">0 registros</span>
+        <h3>Altas cargadas</h3>
+        <span class="count" id="countAltas">0 registros</span>
       </div>
       <div class="table-scroll">
         <table>
@@ -847,37 +857,14 @@
               <th>Motivo</th>
               <th>Estado</th>
               <th>Vigente desde</th>
-              <th>Acción</th>
-            </tr>
-          </thead>
-          <tbody id="tbodyAltasDesde"></tbody>
-        </table>
-        <div class="empty-state" id="emptyAltasDesde" style="display:none;">No hay altas en este grupo.</div>
-      </div>
-    </div>
-
-    <div class="table-panel" style="margin-top:20px;">
-      <div class="table-panel-head">
-        <h3>Pendientes de auditoría PAE</h3>
-        <span class="count" id="countAltasHasta">0 registros</span>
-      </div>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Tipo</th>
-              <th>Identificación</th>
-              <th>Datos</th>
-              <th>Fecha de carga</th>
-              <th>Motivo</th>
-              <th>Estado</th>
+              <th>Estado PAE</th>
               <th>Vigente hasta</th>
               <th>Acción</th>
             </tr>
           </thead>
-          <tbody id="tbodyAltasHasta"></tbody>
+          <tbody id="tbodyAltas"></tbody>
         </table>
-        <div class="empty-state" id="emptyAltasHasta" style="display:none;">No hay altas en este grupo.</div>
+        <div class="empty-state" id="emptyAltas" style="display:none;">Todavía no cargaste ninguna alta. Usá "+ Nueva alta" para agregar la primera.</div>
       </div>
     </div>
   </div>
@@ -974,23 +961,31 @@ let VEHICULOS_DATA = [];
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
 // Flujo de estados de Gestion de Alta, en orden.
-const ALTA_ESTADOS = [
+// Estado "de progreso" de la alta: tiene su propia columna con fecha "Vigente desde".
+const ALTA_ESTADOS_PROGRESO = [
   { value: 'inicio_alta', label: 'Inicio de alta', badge: 'status-suspendido' },
-  { value: 'pae_control_documentario', label: 'Pendiente de auditoría PAE - Control documentario', badge: 'status-suspendido' },
-  { value: 'pae_relaciones_laborales', label: 'Pendiente de auditoría PAE - Relaciones laborales', badge: 'status-suspendido' },
   { value: 'carga_documentacion', label: 'Carga de documentación', badge: 'status-suspendido' },
   { value: 'alta_aprobada', label: 'Alta aprobada', badge: 'status-habilitado' },
 ];
-// División de la tabla de Gestión de Alta en dos secciones:
-// - "en curso" (inicio / carga de documentación / aprobada): solo se ve "Vigente desde"
-// - "pendientes de auditoría PAE": solo se ve "Vigente hasta"
-const ALTA_GRUPO_DESDE = ['inicio_alta', 'carga_documentacion', 'alta_aprobada'];
-const ALTA_GRUPO_HASTA = ['pae_control_documentario', 'pae_relaciones_laborales'];
+// Estado "de auditoría PAE" de la alta: columna independiente, con fecha "Vigente hasta".
+// Puede estar vacío (sin auditoría PAE pendiente) o ser una de estas dos.
+const ALTA_ESTADOS_PAE = [
+  { value: 'pae_control_documentario', label: 'Pendiente de auditoría PAE - Control documentario', badge: 'status-suspendido' },
+  { value: 'pae_relaciones_laborales', label: 'Pendiente de auditoría PAE - Relaciones laborales', badge: 'status-suspendido' },
+];
+const ALTA_ESTADOS = ALTA_ESTADOS_PROGRESO.concat(ALTA_ESTADOS_PAE);
 function altaEstadoInfo(value){
   return ALTA_ESTADOS.find(e => e.value === value) || ALTA_ESTADOS[0];
 }
 function altaEstadoOptionsHtml(selected){
   return ALTA_ESTADOS.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
+}
+function altaEstadoProgresoOptionsHtml(selected){
+  return ALTA_ESTADOS_PROGRESO.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
+}
+function altaEstadoPaeOptionsHtml(selected){
+  const blank = `<option value="" ${!selected?'selected':''}>— Sin auditoría PAE —</option>`;
+  return blank + ALTA_ESTADOS_PAE.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
 }
 
 /* ---------- Historial de estados de una alta (desde/hasta), para
@@ -1235,6 +1230,14 @@ async function migrarAltasAprobadasSinFila(){
 async function guardarHistorialAlta(a){
   const { error } = await supabaseClient.from('altas')
     .update({ estado: a.estado, fecha_aprobacion: a.fechaAprobacion, historial: a.historial || [] })
+    .eq('id', a.id);
+  if(error) throw error;
+}
+
+// Guarda la columna independiente de auditoría PAE (estado_pae + vigente hasta).
+async function guardarPaeAlta(a){
+  const { error } = await supabaseClient.from('altas')
+    .update({ estado_pae: a.estadoPae || null, pae_hasta: a.paeHasta || null })
     .eq('id', a.id);
   if(error) throw error;
 }
@@ -2016,16 +2019,12 @@ function renderCardsAltas(){
   document.getElementById('badgeAltas').textContent = total;
 }
 
-function altaRowHtml(a, modo){
+function altaRowHtml(a){
   const esPersona = a.tipo === 'persona';
   const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
   const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
   const etapa = altaHistorialEtapaActual(a);
   const vigenteDesde = etapa ? etapa.desde : (a.fechaAprobacion || a.fechaCarga);
-  const vigenteHasta = etapa ? etapa.hasta : null;
-  const fechaCol = modo === 'hasta'
-    ? `<td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}"></td>`
-    : `<td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>`;
   return `
     <tr data-alta-id="${a.id}">
       <td><span class="tipo-badge">${esPersona ? '👤 Persona' : '🚚 Vehículo'}</span></td>
@@ -2035,10 +2034,16 @@ function altaRowHtml(a, modo){
       <td class="cell-dim">${escapeHtml(a.motivo || '—')}</td>
       <td>
         <select class="inline-select" data-alta-estado="${a.id}">
-          ${altaEstadoOptionsHtml(a.estado)}
+          ${altaEstadoProgresoOptionsHtml(a.estado)}
         </select>
       </td>
-      ${fechaCol}
+      <td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>
+      <td>
+        <select class="inline-select" data-alta-pae="${a.id}">
+          ${altaEstadoPaeOptionsHtml(a.estadoPae)}
+        </select>
+      </td>
+      <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${a.paeHasta || ''}"></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
@@ -2206,24 +2211,15 @@ function altaCoincideBusqueda(a, q){
 function renderAltasTable(){
   const q = altasBusqueda.trim().toLowerCase();
   const list = altas.filter(a => altaCoincideBusqueda(a, q)).sort((a,b)=> (b.fechaCarga||'').localeCompare(a.fechaCarga||''));
-
-  const enCurso = list.filter(a => ALTA_GRUPO_DESDE.includes(a.estado));
-  const pendientes = list.filter(a => ALTA_GRUPO_HASTA.includes(a.estado));
-
-  renderAltasGrupo(enCurso, 'desde', 'tbodyAltasDesde', 'countAltasDesde', 'emptyAltasDesde');
-  renderAltasGrupo(pendientes, 'hasta', 'tbodyAltasHasta', 'countAltasHasta', 'emptyAltasHasta');
-}
-
-function renderAltasGrupo(list, modo, tbodyId, countId, emptyId){
-  document.getElementById(countId).textContent = list.length + ' registro' + (list.length===1?'':'s');
-  const tbody = document.getElementById(tbodyId);
-  const empty = document.getElementById(emptyId);
+  document.getElementById('countAltas').textContent = list.length + ' registro' + (list.length===1?'':'s');
+  const tbody = document.getElementById('tbodyAltas');
+  const empty = document.getElementById('emptyAltas');
   if(list.length === 0){
     tbody.innerHTML = '';
     empty.style.display = 'block';
   } else {
     empty.style.display = 'none';
-    tbody.innerHTML = list.map(a => altaRowHtml(a, modo)).join('');
+    tbody.innerHTML = list.map(altaRowHtml).join('');
   }
   wireAltasRowEvents(tbody);
 }
@@ -2277,20 +2273,35 @@ function wireAltasRowEvents(tbody){
       renderAll();
     });
   });
+  tbody.querySelectorAll('[data-alta-pae]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const id = sel.getAttribute('data-alta-pae');
+      const a = altas.find(x=>x.id===id);
+      if(!a) return;
+      const prev = a.estadoPae;
+      a.estadoPae = sel.value || null;
+      try{
+        await guardarPaeAlta(a);
+        toast('Estado PAE actualizado');
+      }catch(err){
+        a.estadoPae = prev;
+        toast('No se pudo guardar: ' + (err.message||err));
+      }
+      renderAll();
+    });
+  });
   tbody.querySelectorAll('[data-alta-hasta]').forEach(inp=>{
     inp.addEventListener('change', async ()=>{
       const id = inp.getAttribute('data-alta-hasta');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
-      if(!a.historial || !a.historial.length) altaHistorialInicializar(a);
-      const etapa = altaHistorialEtapaActual(a);
-      const prev = etapa.hasta;
-      etapa.hasta = inp.value || null;
+      const prev = a.paeHasta;
+      a.paeHasta = inp.value || null;
       try{
-        await guardarHistorialAlta(a);
+        await guardarPaeAlta(a);
         toast('Fecha guardada');
       }catch(err){
-        etapa.hasta = prev;
+        a.paeHasta = prev;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
@@ -2340,6 +2351,8 @@ function resetFormAlta(){
   document.getElementById('altaMotivo').value = '';
   document.getElementById('altaEstado').value = 'inicio_alta';
   document.getElementById('altaFechaAprobacion').value = '';
+  document.getElementById('altaEstadoPae').value = '';
+  document.getElementById('altaPaeHasta').value = '';
   document.getElementById('altaCamposPersona').style.display = 'grid';
   document.getElementById('altaCamposVehiculo').style.display = 'none';
 }
@@ -2366,14 +2379,21 @@ function initAltasForm(){
     const fa = document.getElementById('altaFechaAprobacion');
     if(!fa.value) fa.value = todayISO();
   });
+  document.getElementById('altaEstadoPae').addEventListener('change', e=>{
+    const fh = document.getElementById('altaPaeHasta');
+    if(e.target.value && !fh.value) fh.value = '';
+  });
   document.getElementById('btnGuardarAlta').addEventListener('click', async ()=>{
     const tipo = document.getElementById('altaTipo').value;
     const fechaCarga = document.getElementById('altaFechaCarga').value || todayISO();
     const motivo = document.getElementById('altaMotivo').value.trim();
     const estado = document.getElementById('altaEstado').value;
     const fechaAprobacion = document.getElementById('altaFechaAprobacion').value || (estado==='alta_aprobada' ? todayISO() : null);
+    const estadoPae = document.getElementById('altaEstadoPae').value || null;
+    const paeHasta = document.getElementById('altaPaeHasta').value || null;
 
     const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion,
+      estado_pae: estadoPae, pae_hasta: paeHasta,
       historial: [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }] };
     if(tipo === 'persona'){
       a.apellido = document.getElementById('altaApellido').value.trim();
@@ -2396,6 +2416,7 @@ function initAltasForm(){
         id: data.id, tipo: data.tipo, apellido: data.apellido, nombre: data.nombre, cuil: data.cuil,
         empresa: data.empresa, funcion: data.funcion, dominio: data.dominio, marca: data.marca, modelo: data.modelo,
         fechaCarga: data.fecha_carga, motivo: data.motivo, estado: data.estado, fechaAprobacion: data.fecha_aprobacion,
+        estadoPae: data.estado_pae || null, paeHasta: data.pae_hasta || null,
         historial: data.historial || [],
       };
       altas.push(nueva);
@@ -2684,12 +2705,23 @@ async function loadData(opts){
       motivo: r.motivo || null,
       fecha: r.fecha || null,
     }));
-    altas = aRes.data.map(a => ({
-      id: a.id, tipo: a.tipo, apellido: a.apellido, nombre: a.nombre, cuil: a.cuil,
-      empresa: a.empresa, funcion: a.funcion, dominio: a.dominio, marca: a.marca, modelo: a.modelo,
-      fechaCarga: a.fecha_carga, motivo: a.motivo, estado: a.estado, fechaAprobacion: a.fecha_aprobacion,
-      historial: a.historial || [],
-    }));
+    altas = aRes.data.map(a => {
+      // Compatibilidad con datos viejos: si el estado guardado es en
+      // realidad uno de auditoría PAE (de antes de separar la columna),
+      // lo pasamos a estadoPae y dejamos el estado general en algo válido.
+      let estado = a.estado, estadoPae = a.estado_pae || null;
+      if(!estadoPae && (estado === 'pae_control_documentario' || estado === 'pae_relaciones_laborales')){
+        estadoPae = estado;
+        estado = 'carga_documentacion';
+      }
+      return {
+        id: a.id, tipo: a.tipo, apellido: a.apellido, nombre: a.nombre, cuil: a.cuil,
+        empresa: a.empresa, funcion: a.funcion, dominio: a.dominio, marca: a.marca, modelo: a.modelo,
+        fechaCarga: a.fecha_carga, motivo: a.motivo, estado, fechaAprobacion: a.fecha_aprobacion,
+        estadoPae, paeHasta: a.pae_hasta || null,
+        historial: a.historial || [],
+      };
+    });
     rechazos = rRes.data.map(r => ({
       id: r.id, identificacion: r.identificacion, empresa: r.empresa,
       fechaRechazo: r.fecha_rechazo, motivo: r.motivo,
