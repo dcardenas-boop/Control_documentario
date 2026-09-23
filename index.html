@@ -990,24 +990,76 @@ function altaEstadoPaeOptionsHtml(selected){
 
 /* ---------- Historial de estados de una alta (desde/hasta), para
    poder hacer seguimiento de cada etapa. Se guarda en la columna
-   jsonb "historial" de la tabla altas. ---------- */
-function altaHistorialEtapaActual(a){
+   jsonb "historial" de la tabla altas.
+   Un solo registro POR ESTADO (no se acumulan duplicados cada vez
+   que se vuelve a elegir la misma opción): al reabrir una etapa que
+   ya existía se actualiza su "desde"/"hasta" en el lugar. ---------- */
+// Si el historial venía con entradas de auditoría PAE (de antes de
+// separar esa columna), rescata la más reciente como estadoPae/paeHasta
+// y las saca del historial (esa columna ya no vive ahí).
+function altaMigrarPaeDesdeHistorial(a){
   const h = a.historial || [];
-  return h.length ? h[h.length - 1] : null;
+  const esPae = e => e && (e.estado === 'pae_control_documentario' || e.estado === 'pae_relaciones_laborales');
+  const paeEntries = h.filter(esPae);
+  if(paeEntries.length && !a.estadoPae){
+    const masReciente = paeEntries.slice().sort((x,y)=> (x.desde||'').localeCompare(y.desde||'')).pop();
+    a.estadoPae = masReciente.estado;
+    a.paeHasta = masReciente.hasta || null;
+  }
+  if(paeEntries.length){
+    a.historial = h.filter(e => !esPae(e));
+  }
+}
+// Junta entradas repetidas del mismo estado en una sola (por si el
+// historial venía con duplicados de antes de este cambio): se queda
+// con el "desde" más antiguo y el "hasta" de la ocurrencia más reciente.
+function altaHistorialNormalizar(a){
+  const h = a.historial || [];
+  const porEstado = {};
+  const orden = [];
+  h.forEach(e=>{
+    if(!e || !e.estado) return;
+    if(!porEstado[e.estado]) orden.push(e.estado);
+    const previo = porEstado[e.estado];
+    const desde = (previo && previo.desde && (!e.desde || previo.desde < e.desde)) ? previo.desde : e.desde;
+    porEstado[e.estado] = { estado: e.estado, desde: desde || null, hasta: e.hasta || null };
+  });
+  a.historial = orden.map(estado => porEstado[estado]);
+  return a.historial;
+}
+function altaHistorialEtapaActual(a){
+  if(!a.historial) a.historial = [];
+  altaHistorialNormalizar(a);
+  let etapa = a.historial.find(e => e.estado === a.estado);
+  if(!etapa){
+    etapa = { estado: a.estado, desde: a.fechaAprobacion || a.fechaCarga || todayISO(), hasta: null };
+    a.historial.push(etapa);
+  }
+  return etapa;
 }
 // Cierra la etapa vigente (si no tenía ya un "hasta" cargado a mano) y
-// abre una etapa nueva con el estado indicado.
-function altaHistorialAbrirEtapa(a, nuevoEstado, desde){
+// abre/reabre la etapa del estado indicado, sin duplicarla si ya existía.
+function altaHistorialAbrirEtapa(a, prevEstado, nuevoEstado, desde){
   if(!a.historial) a.historial = [];
-  const actual = altaHistorialEtapaActual(a);
-  if(actual && !actual.hasta){ actual.hasta = desde; }
-  a.historial.push({ estado: nuevoEstado, desde: desde || todayISO(), hasta: null });
+  altaHistorialNormalizar(a);
+  if(prevEstado && prevEstado !== nuevoEstado){
+    const anterior = a.historial.find(e => e.estado === prevEstado);
+    if(anterior && !anterior.hasta){ anterior.hasta = desde || todayISO(); }
+  }
+  let entrada = a.historial.find(e => e.estado === nuevoEstado);
+  if(entrada){
+    entrada.desde = desde || todayISO();
+    entrada.hasta = null;
+  } else {
+    a.historial.push({ estado: nuevoEstado, desde: desde || todayISO(), hasta: null });
+  }
 }
 // Alta recién creada: arranca su historial con la etapa elegida en el form.
 function altaHistorialInicializar(a){
   a.historial = [{ estado: a.estado, desde: a.fechaAprobacion || a.fechaCarga || todayISO(), hasta: null }];
 }
 function altaHistorialModalHtml(a){
+  altaHistorialNormalizar(a);
   const h = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
   return h.slice().reverse().map(e => `
     <div class="modal-field">
@@ -2086,6 +2138,7 @@ function historialGeneralFilas(){
     const esPersona = a.tipo === 'persona';
     const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
     const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
+    altaHistorialNormalizar(a);
     const etapas = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
     etapas.forEach(e=>{
       filas.push({
@@ -2235,7 +2288,7 @@ function wireAltasRowEvents(tbody){
       const prevHistorial = JSON.parse(JSON.stringify(a.historial || []));
       a.estado = nuevoEstado;
       if(!a.historial || !a.historial.length) altaHistorialInicializar(a);
-      else altaHistorialAbrirEtapa(a, nuevoEstado, todayISO());
+      else altaHistorialAbrirEtapa(a, prevEstado, nuevoEstado, todayISO());
       if(nuevoEstado === 'alta_aprobada'){ a.fechaAprobacion = altaHistorialEtapaActual(a).desde; }
       try{
         await guardarHistorialAlta(a);
@@ -2742,9 +2795,22 @@ async function loadData(opts){
     // inicial de una sola etapa (la actual), para que "Vigente desde" y
     // el botón "Historial" tengan algo para mostrar.
     for(const a of altas){
+      const paeAntes = a.estadoPae;
+      altaMigrarPaeDesdeHistorial(a);
+      if(a.estadoPae !== paeAntes){
+        try{ await guardarPaeAlta(a); }catch(err){ /* se reintenta en el próximo refresco */ }
+      }
       if(!a.historial || !a.historial.length){
         altaHistorialInicializar(a);
         try{ await guardarHistorialAlta(a); }catch(err){ /* se reintenta en el próximo refresco */ }
+      } else {
+        // Limpia duplicados que hayan quedado guardados de antes (mismo
+        // estado repetido varias veces en el historial).
+        const antes = JSON.stringify(a.historial);
+        altaHistorialNormalizar(a);
+        if(JSON.stringify(a.historial) !== antes){
+          try{ await guardarHistorialAlta(a); }catch(err){ /* se reintenta en el próximo refresco */ }
+        }
       }
     }
 
