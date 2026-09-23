@@ -436,10 +436,11 @@
   @media (max-width:520px){ .form-grid{grid-template-columns:1fr;} }
   .form-field{display:flex;flex-direction:column;gap:5px;}
   .form-field label{font-size:0.75rem;font-weight:700;color:var(--text-dim);}
-  .form-field input[type="text"], .form-field input[type="date"], .form-field select, .form-field input[type="file"]{
+  .form-field input[type="text"], .form-field input[type="date"], .form-field select, .form-field input[type="file"], .form-field textarea{
     padding:9px 11px;border-radius:8px;border:1px solid var(--border);
     background:var(--bg);color:var(--text);font-size:0.85rem;font-family:var(--font);
   }
+  .form-field textarea{resize:vertical;min-height:44px;}
   .field-hint{font-size:0.72rem;color:var(--text-dim);}
   .form-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px;}
   .form-actions button{
@@ -833,6 +834,10 @@
           <label>Vigente hasta</label>
           <input type="date" id="altaPaeHasta">
         </div>
+        <div class="form-field" style="grid-column:1 / -1;">
+          <label>Observaciones</label>
+          <textarea id="altaObservaciones" rows="2" placeholder="Notas u observaciones sobre esta alta..."></textarea>
+        </div>
       </div>
 
       <div class="form-actions">
@@ -859,6 +864,7 @@
               <th>Vigente desde</th>
               <th>Estado PAE</th>
               <th>Vigente hasta</th>
+              <th>Observaciones</th>
               <th>Acción</th>
             </tr>
           </thead>
@@ -1342,6 +1348,14 @@ async function guardarHistorialAlta(a){
 async function guardarPaeAlta(a){
   const { error } = await supabaseClient.from('altas')
     .update({ estado_pae: a.estadoPae || null, pae_hasta: a.paeHasta || null })
+    .eq('id', a.id);
+  if(error) throw error;
+}
+
+// Guarda las observaciones (notas libres) de una alta.
+async function guardarObservacionesAlta(a){
+  const { error } = await supabaseClient.from('altas')
+    .update({ observaciones: a.observaciones || null })
     .eq('id', a.id);
   if(error) throw error;
 }
@@ -2150,6 +2164,7 @@ function altaRowHtml(a){
         </select>
       </td>
       <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}" ${a.estadoPae ? '' : 'disabled title="Elegí primero un estado PAE"'}></td>
+      <td><input type="text" class="inline-text" data-alta-obs="${a.id}" value="${escapeHtml(a.observaciones || '')}" placeholder="—"></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
@@ -2430,6 +2445,22 @@ function wireAltasRowEvents(tbody){
       renderAll();
     });
   });
+  tbody.querySelectorAll('[data-alta-obs]').forEach(inp=>{
+    inp.addEventListener('change', async ()=>{
+      const id = inp.getAttribute('data-alta-obs');
+      const a = altas.find(x=>x.id===id);
+      if(!a) return;
+      const prev = a.observaciones;
+      a.observaciones = inp.value || null;
+      try{
+        await guardarObservacionesAlta(a);
+        toast('Observación guardada');
+      }catch(err){
+        a.observaciones = prev;
+        toast('No se pudo guardar: ' + (err.message||err));
+      }
+    });
+  });
   tbody.querySelectorAll('[data-alta-historial]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const id = btn.getAttribute('data-alta-historial');
@@ -2476,6 +2507,7 @@ function resetFormAlta(){
   document.getElementById('altaFechaAprobacion').value = '';
   document.getElementById('altaEstadoPae').value = '';
   document.getElementById('altaPaeHasta').value = '';
+  document.getElementById('altaObservaciones').value = '';
   document.getElementById('altaCamposPersona').style.display = 'grid';
   document.getElementById('altaCamposVehiculo').style.display = 'none';
 }
@@ -2514,11 +2546,12 @@ function initAltasForm(){
     const fechaAprobacion = document.getElementById('altaFechaAprobacion').value || (estado==='alta_aprobada' ? todayISO() : null);
     const estadoPae = document.getElementById('altaEstadoPae').value || null;
     const paeHasta = document.getElementById('altaPaeHasta').value || null;
+    const observaciones = document.getElementById('altaObservaciones').value.trim() || null;
 
     const historialInicial = [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }];
     if(estadoPae){ historialInicial.push({ estado: estadoPae, desde: fechaCarga, hasta: paeHasta || null }); }
     const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion,
-      estado_pae: estadoPae, pae_hasta: paeHasta,
+      estado_pae: estadoPae, pae_hasta: paeHasta, observaciones,
       historial: historialInicial };
     if(tipo === 'persona'){
       a.apellido = document.getElementById('altaApellido').value.trim();
@@ -2542,6 +2575,7 @@ function initAltasForm(){
         empresa: data.empresa, funcion: data.funcion, dominio: data.dominio, marca: data.marca, modelo: data.modelo,
         fechaCarga: data.fecha_carga, motivo: data.motivo, estado: data.estado, fechaAprobacion: data.fecha_aprobacion,
         estadoPae: data.estado_pae || null, paeHasta: data.pae_hasta || null,
+        observaciones: data.observaciones || null,
         historial: data.historial || [],
       };
       altas.push(nueva);
@@ -2844,6 +2878,7 @@ async function loadData(opts){
         empresa: a.empresa, funcion: a.funcion, dominio: a.dominio, marca: a.marca, modelo: a.modelo,
         fechaCarga: a.fecha_carga, motivo: a.motivo, estado, fechaAprobacion: a.fecha_aprobacion,
         estadoPae, paeHasta: a.pae_hasta || null,
+        observaciones: a.observaciones || null,
         historial: a.historial || [],
       };
     });
