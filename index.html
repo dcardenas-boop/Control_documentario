@@ -994,20 +994,20 @@ function altaEstadoPaeOptionsHtml(selected){
    Un solo registro POR ESTADO (no se acumulan duplicados cada vez
    que se vuelve a elegir la misma opción): al reabrir una etapa que
    ya existía se actualiza su "desde"/"hasta" en el lugar. ---------- */
-// Si el historial venía con entradas de auditoría PAE (de antes de
-// separar esa columna), rescata la más reciente como estadoPae/paeHasta
-// y las saca del historial (esa columna ya no vive ahí).
+// Si el estado PAE actual todavía no está cargado pero el historial ya
+// tiene alguna etapa de auditoría PAE (de antes de tener la columna
+// separada), rescata la más reciente como estadoPae. Las etapas PAE se
+// quedan EN el historial (igual que las de progreso) para que su fecha
+// de aprobación/cierre se siga viendo en "Historial".
 function altaMigrarPaeDesdeHistorial(a){
   const h = a.historial || [];
   const esPae = e => e && (e.estado === 'pae_control_documentario' || e.estado === 'pae_relaciones_laborales');
   const paeEntries = h.filter(esPae);
   if(paeEntries.length && !a.estadoPae){
-    const masReciente = paeEntries.slice().sort((x,y)=> (x.desde||'').localeCompare(y.desde||'')).pop();
+    const abierta = paeEntries.find(e => !e.hasta);
+    const masReciente = abierta || paeEntries.slice().sort((x,y)=> (x.desde||'').localeCompare(y.desde||'')).pop();
     a.estadoPae = masReciente.estado;
     a.paeHasta = masReciente.hasta || null;
-  }
-  if(paeEntries.length){
-    a.historial = h.filter(e => !esPae(e));
   }
 }
 // Junta entradas repetidas del mismo estado en una sola (por si el
@@ -1033,6 +1033,20 @@ function altaHistorialEtapaActual(a){
   let etapa = a.historial.find(e => e.estado === a.estado);
   if(!etapa){
     etapa = { estado: a.estado, desde: a.fechaAprobacion || a.fechaCarga || todayISO(), hasta: null };
+    a.historial.push(etapa);
+  }
+  return etapa;
+}
+// Igual que altaHistorialEtapaActual pero para la columna de auditoría
+// PAE (Estado PAE / Vigente hasta). Si no hay auditoría PAE elegida,
+// no hay etapa vigente (devuelve null: la columna "Vigente hasta" queda vacía).
+function altaPaeEtapaActual(a){
+  if(!a.estadoPae) return null;
+  if(!a.historial) a.historial = [];
+  altaHistorialNormalizar(a);
+  let etapa = a.historial.find(e => e.estado === a.estadoPae);
+  if(!etapa){
+    etapa = { estado: a.estadoPae, desde: todayISO(), hasta: a.paeHasta || null };
     a.historial.push(etapa);
   }
   return etapa;
@@ -2077,6 +2091,8 @@ function altaRowHtml(a){
   const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
   const etapa = altaHistorialEtapaActual(a);
   const vigenteDesde = etapa ? etapa.desde : (a.fechaAprobacion || a.fechaCarga);
+  const etapaPae = altaPaeEtapaActual(a);
+  const vigenteHasta = etapaPae ? etapaPae.hasta : null;
   return `
     <tr data-alta-id="${a.id}">
       <td><span class="tipo-badge">${esPersona ? '👤 Persona' : '🚚 Vehículo'}</span></td>
@@ -2095,7 +2111,7 @@ function altaRowHtml(a){
           ${altaEstadoPaeOptionsHtml(a.estadoPae)}
         </select>
       </td>
-      <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${a.paeHasta || ''}"></td>
+      <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}" ${a.estadoPae ? '' : 'disabled title="Elegí primero un estado PAE"'}></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
@@ -2331,13 +2347,27 @@ function wireAltasRowEvents(tbody){
       const id = sel.getAttribute('data-alta-pae');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
-      const prev = a.estadoPae;
-      a.estadoPae = sel.value || null;
+      const prevPae = a.estadoPae;
+      const prevHistorial = JSON.parse(JSON.stringify(a.historial || []));
+      const nuevoPae = sel.value || null;
+      a.estadoPae = nuevoPae;
+      if(nuevoPae){
+        // Abre/reabre la etapa PAE elegida en el historial (cierra la anterior si había otra).
+        altaHistorialAbrirEtapa(a, prevPae, nuevoPae, todayISO());
+        a.paeHasta = null;
+      } else if(prevPae){
+        // Se sacó la auditoría PAE: cerramos la etapa anterior con la fecha de hoy.
+        if(!a.historial) a.historial = [];
+        const anterior = a.historial.find(e => e.estado === prevPae);
+        if(anterior && !anterior.hasta){ anterior.hasta = todayISO(); }
+        a.paeHasta = anterior ? anterior.hasta : null;
+      }
       try{
+        await guardarHistorialAlta(a);
         await guardarPaeAlta(a);
         toast('Estado PAE actualizado');
       }catch(err){
-        a.estadoPae = prev;
+        a.estadoPae = prevPae; a.historial = prevHistorial;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
@@ -2348,13 +2378,17 @@ function wireAltasRowEvents(tbody){
       const id = inp.getAttribute('data-alta-hasta');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
-      const prev = a.paeHasta;
-      a.paeHasta = inp.value || null;
+      if(!a.estadoPae){ toast('Elegí primero un estado PAE'); inp.value = ''; return; }
+      const etapa = altaPaeEtapaActual(a);
+      const prev = etapa.hasta;
+      etapa.hasta = inp.value || null;
+      a.paeHasta = etapa.hasta;
       try{
+        await guardarHistorialAlta(a);
         await guardarPaeAlta(a);
         toast('Fecha guardada');
       }catch(err){
-        a.paeHasta = prev;
+        etapa.hasta = prev; a.paeHasta = prev;
         toast('No se pudo guardar: ' + (err.message||err));
       }
       renderAll();
@@ -2445,9 +2479,11 @@ function initAltasForm(){
     const estadoPae = document.getElementById('altaEstadoPae').value || null;
     const paeHasta = document.getElementById('altaPaeHasta').value || null;
 
+    const historialInicial = [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }];
+    if(estadoPae){ historialInicial.push({ estado: estadoPae, desde: fechaCarga, hasta: paeHasta || null }); }
     const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion,
       estado_pae: estadoPae, pae_hasta: paeHasta,
-      historial: [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }] };
+      historial: historialInicial };
     if(tipo === 'persona'){
       a.apellido = document.getElementById('altaApellido').value.trim();
       a.nombre = document.getElementById('altaNombre').value.trim();
