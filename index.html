@@ -477,6 +477,16 @@
     background:var(--bg);color:var(--text);font-size:0.8rem;font-family:var(--font);
     width:100%;min-width:70px;box-sizing:border-box;
   }
+  /* Gestión de Alta: la tabla se ajusta a los textos (sin cortar) */
+  .altas-table{min-width:0;}
+  .altas-table thead th{padding:10px 8px;white-space:normal;}
+  .altas-table tbody td{white-space:normal;padding:9px 8px;vertical-align:middle;}
+  .altas-table td.col-texto{min-width:110px;max-width:190px;word-break:break-word;}
+  .altas-table .inline-date{width:128px;}
+  .altas-table .inline-select{max-width:100%;}
+  .altas-table textarea.inline-text{
+    min-width:190px;resize:vertical;overflow:hidden;line-height:1.35;display:block;
+  }
   .inline-text:focus, .inline-date:focus, .inline-select:focus{
     outline:2px solid var(--accent); outline-offset:1px;
   }
@@ -852,12 +862,11 @@
         <span class="count" id="countAltas">0 registros</span>
       </div>
       <div class="table-scroll">
-        <table>
+        <table class="altas-table">
           <thead>
             <tr>
               <th>Tipo</th>
               <th>Identificación</th>
-              <th>Datos</th>
               <th>Fecha de carga</th>
               <th>Motivo</th>
               <th>Estado</th>
@@ -989,9 +998,12 @@ function altaEstadoOptionsHtml(selected){
 function altaEstadoProgresoOptionsHtml(selected){
   return ALTA_ESTADOS_PROGRESO.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
 }
-function altaEstadoPaeOptionsHtml(selected){
+function altaEstadoPaeOptionsHtml(selected, corto){
   const blank = `<option value="" ${!selected?'selected':''}>— Sin auditoría PAE —</option>`;
-  return blank + ALTA_ESTADOS_PAE.map(e => `<option value="${e.value}" ${selected===e.value?'selected':''}>${e.label}</option>`).join('');
+  return blank + ALTA_ESTADOS_PAE.map(e => {
+    const label = corto ? e.label.replace('Pendiente de auditoría ', 'Pend. ') : e.label;
+    return `<option value="${e.value}" ${selected===e.value?'selected':''} title="${e.label}">${label}</option>`;
+  }).join('');
 }
 
 /* ---------- Historial de estados de una alta (desde/hasta), para
@@ -1028,7 +1040,8 @@ function altaHistorialNormalizar(a){
     if(!porEstado[e.estado]) orden.push(e.estado);
     const previo = porEstado[e.estado];
     const desde = (previo && previo.desde && (!e.desde || previo.desde < e.desde)) ? previo.desde : e.desde;
-    porEstado[e.estado] = { estado: e.estado, desde: desde || null, hasta: e.hasta || null };
+    const observacion = e.observacion || (previo && previo.observacion) || null;
+    porEstado[e.estado] = { estado: e.estado, desde: desde || null, hasta: e.hasta || null, observacion };
   });
   a.historial = orden.map(estado => porEstado[estado]);
   return a.historial;
@@ -1108,7 +1121,8 @@ function altaHistorialModalHtml(a){
     : `<td class="cell-dim">—</td><td class="cell-dim">—</td>`;
   const filas = ordenFechas.map(key => {
     const { progreso, pae } = porFecha[key];
-    return `<tr>${celda(progreso)}${celda(pae)}</tr>`;
+    const obs = [progreso && progreso.observacion, pae && pae.observacion].filter(Boolean).join(' / ');
+    return `<tr>${celda(progreso)}${celda(pae)}<td style="white-space:pre-wrap;min-width:180px;">${obs ? escapeHtml(obs) : '<span class="cell-dim">—</span>'}</td></tr>`;
   }).join('');
   return `
     <div class="historial-table-wrap">
@@ -1119,6 +1133,7 @@ function altaHistorialModalHtml(a){
             <th>Vigente desde / hasta</th>
             <th>Estado PAE</th>
             <th>Vigente desde / hasta</th>
+            <th>Observaciones</th>
           </tr>
         </thead>
         <tbody>${filas}</tbody>
@@ -2147,11 +2162,10 @@ function altaRowHtml(a){
   const vigenteHasta = etapaPae ? etapaPae.hasta : null;
   return `
     <tr data-alta-id="${a.id}">
-      <td><span class="tipo-badge">${esPersona ? '👤 Persona' : '🚚 Vehículo'}</span></td>
-      <td class="cell-strong">${escapeHtml(identificacion)}</td>
-      <td class="cell-dim">${escapeHtml(datos || '—')}</td>
-      <td class="cell-dim">${fmtFecha(a.fechaCarga)}</td>
-      <td class="cell-dim">${escapeHtml(a.motivo || '—')}</td>
+      <td title="${esPersona ? 'Persona' : 'Vehículo'}" style="font-size:1.1rem;text-align:center;">${esPersona ? '👤' : '🚚'}</td>
+      <td class="col-texto"><div class="cell-strong">${escapeHtml(identificacion)}</div>${datos ? `<div class="cell-dim">${escapeHtml(datos)}</div>` : ''}</td>
+      <td class="cell-dim" style="white-space:nowrap;">${fmtFecha(a.fechaCarga)}</td>
+      <td class="cell-dim col-texto">${escapeHtml(a.motivo || '—')}</td>
       <td>
         <select class="inline-select" data-alta-estado="${a.id}">
           ${altaEstadoProgresoOptionsHtml(a.estado)}
@@ -2160,11 +2174,11 @@ function altaRowHtml(a){
       <td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>
       <td>
         <select class="inline-select" data-alta-pae="${a.id}">
-          ${altaEstadoPaeOptionsHtml(a.estadoPae)}
+          ${altaEstadoPaeOptionsHtml(a.estadoPae, true)}
         </select>
       </td>
       <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}" ${a.estadoPae ? '' : 'disabled title="Elegí primero un estado PAE"'}></td>
-      <td><input type="text" class="inline-text" data-alta-obs="${a.id}" value="${escapeHtml(a.observaciones || '')}" placeholder="—"></td>
+      <td><textarea class="inline-text" rows="1" data-alta-obs="${a.id}" placeholder="—">${escapeHtml(a.observaciones || '')}</textarea></td>
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
@@ -2209,7 +2223,7 @@ function historialGeneralFilas(){
     const etapas = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
     etapas.forEach(e=>{
       filas.push({
-        tipo: a.tipo, identificacion, datos, motivo: a.motivo, estado: e.estado, desde: e.desde, hasta: e.hasta,
+        tipo: a.tipo, identificacion, datos, motivo: a.motivo, estado: e.estado, desde: e.desde, hasta: e.hasta, observacion: e.observacion || '',
         dominio: a.dominio || '', cuil: a.cuil || '',
       });
     });
@@ -2223,7 +2237,7 @@ function historialGeneralFiltrar(filas, busqueda, etapa){
   return filas.filter(f=>{
     if(etapa && f.estado !== etapa) return false;
     if(q){
-      const bolsa = [f.identificacion, f.dominio, f.cuil, f.datos].join(' ').toLowerCase();
+      const bolsa = [f.identificacion, f.dominio, f.cuil, f.datos, f.observacion].join(' ').toLowerCase();
       if(!bolsa.includes(q)) return false;
     }
     return true;
@@ -2240,6 +2254,7 @@ function historialGeneralFilaHtml(f){
       <td><span class="status-pill ${altaEstadoInfo(f.estado).badge}">${escapeHtml(altaEstadoInfo(f.estado).label)}</span></td>
       <td class="cell-dim">${fmtFecha(f.desde)}</td>
       <td class="cell-dim">${f.hasta ? fmtFecha(f.hasta) : 'Actualidad'}</td>
+      <td style="white-space:pre-wrap;">${f.observacion ? escapeHtml(f.observacion) : '<span class="cell-dim">—</span>'}</td>
     </tr>
   `;
 }
@@ -2253,11 +2268,12 @@ function descargarHistorialGeneral(filas){
     etapa: altaEstadoInfo(f.estado).label,
     desde: fmtFecha(f.desde),
     hasta: f.hasta ? fmtFecha(f.hasta) : 'Actualidad',
+    observacion: f.observacion || '',
   }));
   exportXLSX(
     rows,
-    ['Tipo', 'Identificación', 'Datos', 'Motivo', 'Etapa', 'Desde', 'Hasta'],
-    ['tipo', 'identificacion', 'datos', 'motivo', 'etapa', 'desde', 'hasta'],
+    ['Tipo', 'Identificación', 'Datos', 'Motivo', 'Etapa', 'Desde', 'Hasta', 'Observaciones'],
+    ['tipo', 'identificacion', 'datos', 'motivo', 'etapa', 'desde', 'hasta', 'observacion'],
     'historial_general_altas_petrosar.xlsx',
     'Historial altas'
   );
@@ -2272,7 +2288,7 @@ function abrirHistorialGeneral(){
     const filas = historialGeneralFiltrar(todas, busqueda, etapa);
     document.getElementById('tbodyHistorialGeneral').innerHTML = filas.length
       ? filas.map(historialGeneralFilaHtml).join('')
-      : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-dim);">No hay registros para este filtro.</td></tr>';
+      : '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-dim);">No hay registros para este filtro.</td></tr>';
     document.getElementById('historialGeneralCount').textContent = filas.length + ' de ' + todas.length + ' registro' + (todas.length===1?'':'s');
     return filas;
   };
@@ -2305,6 +2321,7 @@ function abrirHistorialGeneral(){
             <th>Etapa</th>
             <th>Desde</th>
             <th>Hasta</th>
+            <th>Observaciones</th>
           </tr>
         </thead>
         <tbody id="tbodyHistorialGeneral"></tbody>
@@ -2342,6 +2359,16 @@ function renderAltasTable(){
     tbody.innerHTML = list.map(altaRowHtml).join('');
   }
   wireAltasRowEvents(tbody);
+}
+
+// Ajusta la altura del cuadro de observaciones a su texto (si la solapa
+// está oculta no se puede medir: se vuelve a ajustar al mostrarla).
+function ajustarAlturaObs(inp){
+  inp.style.height = 'auto';
+  if(inp.scrollHeight > 0) inp.style.height = inp.scrollHeight + 'px';
+}
+function ajustarObservacionesAltas(){
+  document.querySelectorAll('#tbodyAltas [data-alta-obs]').forEach(ajustarAlturaObs);
 }
 
 function wireAltasRowEvents(tbody){
@@ -2446,17 +2473,28 @@ function wireAltasRowEvents(tbody){
     });
   });
   tbody.querySelectorAll('[data-alta-obs]').forEach(inp=>{
+    // El cuadro crece solo para que la observación se vea completa.
+    const ajustar = () => ajustarAlturaObs(inp);
+    ajustar();
+    inp.addEventListener('input', ajustar);
+    inp.addEventListener('focus', ajustar);
     inp.addEventListener('change', async ()=>{
       const id = inp.getAttribute('data-alta-obs');
       const a = altas.find(x=>x.id===id);
       if(!a) return;
       const prev = a.observaciones;
-      a.observaciones = inp.value || null;
+      const prevHistorial = JSON.parse(JSON.stringify(a.historial || []));
+      const texto = inp.value.trim() || null;
+      a.observaciones = texto;
+      // También queda en el historial, en la etapa vigente de la alta.
+      const etapa = altaHistorialEtapaActual(a);
+      etapa.observacion = texto;
       try{
         await guardarObservacionesAlta(a);
+        await guardarHistorialAlta(a);
         toast('Observación guardada');
       }catch(err){
-        a.observaciones = prev;
+        a.observaciones = prev; a.historial = prevHistorial;
         toast('No se pudo guardar: ' + (err.message||err));
       }
     });
@@ -2548,7 +2586,7 @@ function initAltasForm(){
     const paeHasta = document.getElementById('altaPaeHasta').value || null;
     const observaciones = document.getElementById('altaObservaciones').value.trim() || null;
 
-    const historialInicial = [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null }];
+    const historialInicial = [{ estado, desde: fechaAprobacion || fechaCarga, hasta: null, observacion: observaciones }];
     if(estadoPae){ historialInicial.push({ estado: estadoPae, desde: fechaCarga, hasta: paeHasta || null }); }
     const a = { tipo, fecha_carga: fechaCarga, motivo, estado, fecha_aprobacion: fechaAprobacion,
       estado_pae: estadoPae, pae_hasta: paeHasta, observaciones,
@@ -2902,6 +2940,15 @@ async function loadData(opts){
     // inicial de una sola etapa (la actual), para que "Vigente desde" y
     // el botón "Historial" tengan algo para mostrar.
     for(const a of altas){
+      // Observaciones cargadas antes de guardarlas en el historial: se
+      // agregan a la etapa vigente para que también figuren ahí.
+      if(a.observaciones && a.historial && a.historial.length){
+        const etapaObs = altaHistorialEtapaActual(a);
+        if(!etapaObs.observacion){
+          etapaObs.observacion = a.observaciones;
+          try{ await guardarHistorialAlta(a); }catch(err){ /* se reintenta en el próximo refresco */ }
+        }
+      }
       const paeAntes = a.estadoPae;
       altaMigrarPaeDesdeHistorial(a);
       if(a.estadoPae !== paeAntes){
@@ -3090,6 +3137,7 @@ function initTabs(){
       allSections.forEach(s=>{
         document.getElementById('section-'+s).style.display = (s===section) ? 'block' : 'none';
       });
+      if(section === 'altas') ajustarObservacionesAltas();
     });
   });
 
