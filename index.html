@@ -1088,13 +1088,21 @@ function altaHistorialModalHtml(a){
     return porFecha !== 0 ? porFecha : ordenIndice(x) - ordenIndice(y);
   });
   const esPae = estado => ALTA_ESTADOS_PAE.some(e => e.value === estado);
-  const filas = ordenado.map(e => {
-    const label = escapeHtml(altaEstadoInfo(e.estado).label);
-    const rango = `${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}`;
-    if(esPae(e.estado)){
-      return `<tr><td class="cell-dim">—</td><td class="cell-dim">—</td><td class="cell-strong">${label}</td><td>${rango}</td></tr>`;
-    }
-    return `<tr><td class="cell-strong">${label}</td><td>${rango}</td><td class="cell-dim">—</td><td class="cell-dim">—</td></tr>`;
+  // Si una etapa de progreso y una de PAE arrancaron el mismo día, van en
+  // la misma línea (igual que se ven juntas, en la misma fila, en el panel).
+  const porFecha = {};
+  const ordenFechas = [];
+  ordenado.forEach(e=>{
+    const key = e.desde || ('_sinfecha_' + e.estado);
+    if(!porFecha[key]){ porFecha[key] = { progreso: null, pae: null }; ordenFechas.push(key); }
+    if(esPae(e.estado)) porFecha[key].pae = e; else porFecha[key].progreso = e;
+  });
+  const celda = e => e
+    ? `<td class="cell-strong">${escapeHtml(altaEstadoInfo(e.estado).label)}</td><td>${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}</td>`
+    : `<td class="cell-dim">—</td><td class="cell-dim">—</td>`;
+  const filas = ordenFechas.map(key => {
+    const { progreso, pae } = porFecha[key];
+    return `<tr>${celda(progreso)}${celda(pae)}</tr>`;
   }).join('');
   return `
     <div class="historial-table-wrap">
