@@ -833,8 +833,8 @@
 
     <div class="table-panel">
       <div class="table-panel-head">
-        <h3>Altas cargadas</h3>
-        <span class="count" id="countAltas">0 registros</span>
+        <h3>Inicio de alta / Carga de documentación / Alta aprobada</h3>
+        <span class="count" id="countAltasDesde">0 registros</span>
       </div>
       <div class="table-scroll">
         <table>
@@ -847,13 +847,37 @@
               <th>Motivo</th>
               <th>Estado</th>
               <th>Vigente desde</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody id="tbodyAltasDesde"></tbody>
+        </table>
+        <div class="empty-state" id="emptyAltasDesde" style="display:none;">No hay altas en este grupo.</div>
+      </div>
+    </div>
+
+    <div class="table-panel" style="margin-top:20px;">
+      <div class="table-panel-head">
+        <h3>Pendientes de auditoría PAE</h3>
+        <span class="count" id="countAltasHasta">0 registros</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Identificación</th>
+              <th>Datos</th>
+              <th>Fecha de carga</th>
+              <th>Motivo</th>
+              <th>Estado</th>
               <th>Vigente hasta</th>
               <th>Acción</th>
             </tr>
           </thead>
-          <tbody id="tbodyAltas"></tbody>
+          <tbody id="tbodyAltasHasta"></tbody>
         </table>
-        <div class="empty-state" id="emptyAltas" style="display:none;">Todavía no cargaste ninguna alta. Usá "+ Nueva alta" para agregar la primera.</div>
+        <div class="empty-state" id="emptyAltasHasta" style="display:none;">No hay altas en este grupo.</div>
       </div>
     </div>
   </div>
@@ -957,6 +981,11 @@ const ALTA_ESTADOS = [
   { value: 'carga_documentacion', label: 'Carga de documentación', badge: 'status-suspendido' },
   { value: 'alta_aprobada', label: 'Alta aprobada', badge: 'status-habilitado' },
 ];
+// División de la tabla de Gestión de Alta en dos secciones:
+// - "en curso" (inicio / carga de documentación / aprobada): solo se ve "Vigente desde"
+// - "pendientes de auditoría PAE": solo se ve "Vigente hasta"
+const ALTA_GRUPO_DESDE = ['inicio_alta', 'carga_documentacion', 'alta_aprobada'];
+const ALTA_GRUPO_HASTA = ['pae_control_documentario', 'pae_relaciones_laborales'];
 function altaEstadoInfo(value){
   return ALTA_ESTADOS.find(e => e.value === value) || ALTA_ESTADOS[0];
 }
@@ -1987,13 +2016,16 @@ function renderCardsAltas(){
   document.getElementById('badgeAltas').textContent = total;
 }
 
-function altaRowHtml(a){
+function altaRowHtml(a, modo){
   const esPersona = a.tipo === 'persona';
   const identificacion = esPersona ? `${a.apellido||''} ${a.nombre||''}`.trim() || '—' : (a.dominio || '—');
   const datos = esPersona ? [a.empresa, a.funcion].filter(Boolean).join(' — ') : [a.marca, a.modelo].filter(Boolean).join(' ');
   const etapa = altaHistorialEtapaActual(a);
   const vigenteDesde = etapa ? etapa.desde : (a.fechaAprobacion || a.fechaCarga);
   const vigenteHasta = etapa ? etapa.hasta : null;
+  const fechaCol = modo === 'hasta'
+    ? `<td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}"></td>`
+    : `<td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>`;
   return `
     <tr data-alta-id="${a.id}">
       <td><span class="tipo-badge">${esPersona ? '👤 Persona' : '🚚 Vehículo'}</span></td>
@@ -2006,8 +2038,7 @@ function altaRowHtml(a){
           ${altaEstadoOptionsHtml(a.estado)}
         </select>
       </td>
-      <td><input type="date" class="inline-date" data-alta-desde="${a.id}" value="${vigenteDesde || ''}"></td>
-      <td><input type="date" class="inline-date" data-alta-hasta="${a.id}" value="${vigenteHasta || ''}"></td>
+      ${fechaCol}
       <td>
         <div class="action-cell">
           <button class="btn-ficha" data-alta-historial="${a.id}">Historial</button>
@@ -2175,16 +2206,29 @@ function altaCoincideBusqueda(a, q){
 function renderAltasTable(){
   const q = altasBusqueda.trim().toLowerCase();
   const list = altas.filter(a => altaCoincideBusqueda(a, q)).sort((a,b)=> (b.fechaCarga||'').localeCompare(a.fechaCarga||''));
-  document.getElementById('countAltas').textContent = list.length + ' registro' + (list.length===1?'':'s');
-  const tbody = document.getElementById('tbodyAltas');
-  const empty = document.getElementById('emptyAltas');
+
+  const enCurso = list.filter(a => ALTA_GRUPO_DESDE.includes(a.estado));
+  const pendientes = list.filter(a => ALTA_GRUPO_HASTA.includes(a.estado));
+
+  renderAltasGrupo(enCurso, 'desde', 'tbodyAltasDesde', 'countAltasDesde', 'emptyAltasDesde');
+  renderAltasGrupo(pendientes, 'hasta', 'tbodyAltasHasta', 'countAltasHasta', 'emptyAltasHasta');
+}
+
+function renderAltasGrupo(list, modo, tbodyId, countId, emptyId){
+  document.getElementById(countId).textContent = list.length + ' registro' + (list.length===1?'':'s');
+  const tbody = document.getElementById(tbodyId);
+  const empty = document.getElementById(emptyId);
   if(list.length === 0){
     tbody.innerHTML = '';
     empty.style.display = 'block';
   } else {
     empty.style.display = 'none';
-    tbody.innerHTML = list.map(altaRowHtml).join('');
+    tbody.innerHTML = list.map(a => altaRowHtml(a, modo)).join('');
   }
+  wireAltasRowEvents(tbody);
+}
+
+function wireAltasRowEvents(tbody){
   tbody.querySelectorAll('[data-alta-estado]').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
       const id = sel.getAttribute('data-alta-estado');
