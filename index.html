@@ -771,6 +771,7 @@
     <div class="toolbar">
       <button class="primary" id="btnNuevaAlta">+ Nueva alta</button>
       <button id="btnHistorialGeneral">📋 Ver historial general</button>
+      <input type="text" id="buscarAltas" placeholder="Buscar por nombre, apellido o vehículo (dominio)...">
     </div>
 
     <div class="form-panel" id="formAltaPanel" style="display:none;">
@@ -864,6 +865,7 @@
 
     <div class="toolbar">
       <button class="primary" id="btnNuevoRechazo">+ Nuevo rechazo</button>
+      <input type="text" id="buscarRechazos" placeholder="Buscar por nombre o vehículo (dominio)...">
     </div>
 
     <div class="form-panel" id="formRechazoPanel" style="display:none;">
@@ -1045,7 +1047,7 @@ async function deletePersona(cuil){
 }
 
 /* ---------- Estados de Habilitación (editable en la tabla) ---------- */
-const ESTADO_OPCIONES = ['Habilitado', 'No habilitado', 'Suspendido', 'Baja'];
+const ESTADO_OPCIONES = ['Habilitado', 'Inhabilitado', 'Suspendido', 'Baja'];
 function estadoOptionsHtml(selected){
   const opciones = ESTADO_OPCIONES.includes(selected) ? ESTADO_OPCIONES : [selected || 'Habilitado', ...ESTADO_OPCIONES];
   return opciones.map(o => `<option value="${escapeHtml(o)}" ${selected===o?'selected':''}>${escapeHtml(o)}</option>`).join('');
@@ -2164,8 +2166,15 @@ function abrirHistorialGeneral(){
   renderTabla();
 }
 
+let altasBusqueda = '';
+function altaCoincideBusqueda(a, q){
+  if(!q) return true;
+  const bolsa = [a.apellido, a.nombre, a.cuil, a.dominio, a.marca, a.modelo, a.empresa].filter(Boolean).join(' ').toLowerCase();
+  return bolsa.includes(q);
+}
 function renderAltasTable(){
-  const list = altas.slice().sort((a,b)=> (b.fechaCarga||'').localeCompare(a.fechaCarga||''));
+  const q = altasBusqueda.trim().toLowerCase();
+  const list = altas.filter(a => altaCoincideBusqueda(a, q)).sort((a,b)=> (b.fechaCarga||'').localeCompare(a.fechaCarga||''));
   document.getElementById('countAltas').textContent = list.length + ' registro' + (list.length===1?'':'s');
   const tbody = document.getElementById('tbodyAltas');
   const empty = document.getElementById('emptyAltas');
@@ -2297,6 +2306,10 @@ function initAltasForm(){
     document.getElementById('formAltaPanel').style.display = 'block';
   });
   document.getElementById('btnHistorialGeneral').addEventListener('click', abrirHistorialGeneral);
+  document.getElementById('buscarAltas').addEventListener('input', e=>{
+    altasBusqueda = e.target.value;
+    renderAltasTable();
+  });
   document.getElementById('btnCancelarAlta').addEventListener('click', ()=>{
     document.getElementById('formAltaPanel').style.display = 'none';
   });
@@ -2409,8 +2422,15 @@ function rechazoRowHtml(r){
   `;
 }
 
+let rechazosBusqueda = '';
+function rechazoCoincideBusqueda(r, q){
+  if(!q) return true;
+  const bolsa = [r.identificacion, r.empresa].filter(Boolean).join(' ').toLowerCase();
+  return bolsa.includes(q);
+}
 function renderRechazosTable(){
-  const list = rechazos.slice().sort((a,b)=> (b.fechaRechazo||'').localeCompare(a.fechaRechazo||''));
+  const q = rechazosBusqueda.trim().toLowerCase();
+  const list = rechazos.filter(r => rechazoCoincideBusqueda(r, q)).sort((a,b)=> (b.fechaRechazo||'').localeCompare(a.fechaRechazo||''));
   document.getElementById('countRechazos').textContent = list.length + ' registro' + (list.length===1?'':'s');
   const tbody = document.getElementById('tbodyRechazos');
   const empty = document.getElementById('emptyRechazos');
@@ -2474,6 +2494,10 @@ function initRechazosForm(){
   document.getElementById('btnNuevoRechazo').addEventListener('click', ()=>{
     resetFormRechazo();
     document.getElementById('formRechazoPanel').style.display = 'block';
+  });
+  document.getElementById('buscarRechazos').addEventListener('input', e=>{
+    rechazosBusqueda = e.target.value;
+    renderRechazosTable();
   });
   document.getElementById('btnCancelarRechazo').addEventListener('click', ()=>{
     document.getElementById('formRechazoPanel').style.display = 'none';
@@ -2716,7 +2740,7 @@ function estadoDesdeTexto(row){
   if(t.startsWith('habil') && !t.includes('no ') && !t.includes('inhab')) return 'Habilitado';
   if(t.includes('suspend')) return 'Suspendido';
   if(t.includes('baja')) return 'Baja';
-  return 'No habilitado';
+  return 'Inhabilitado';
 }
 
 function filasVehiculosARows(filas){
