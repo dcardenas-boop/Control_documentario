@@ -1072,6 +1072,10 @@ function altaHistorialAbrirEtapa(a, prevEstado, nuevoEstado, desde){
 function altaHistorialInicializar(a){
   a.historial = [{ estado: a.estado, desde: a.fechaAprobacion || a.fechaCarga || todayISO(), hasta: null }];
 }
+// Mismas columnas que la tabla del panel (Estado / Vigente desde /
+// Estado PAE / Vigente hasta): cada fila del historial llena solo el
+// par de columnas de su propia pista (progreso o PAE), dejando el otro
+// par vacío, para que se vea "tal cual está en el panel".
 function altaHistorialModalHtml(a){
   altaHistorialNormalizar(a);
   const h = (a.historial && a.historial.length) ? a.historial : [{ estado: a.estado, desde: a.fechaCarga, hasta: null }];
@@ -1083,12 +1087,30 @@ function altaHistorialModalHtml(a){
     const porFecha = (x.desde || '').localeCompare(y.desde || '');
     return porFecha !== 0 ? porFecha : ordenIndice(x) - ordenIndice(y);
   });
-  return ordenado.map(e => `
-    <div class="modal-field">
-      <span class="k">${escapeHtml(altaEstadoInfo(e.estado).label)}</span>
-      <span class="v">${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}</span>
+  const esPae = estado => ALTA_ESTADOS_PAE.some(e => e.value === estado);
+  const filas = ordenado.map(e => {
+    const label = escapeHtml(altaEstadoInfo(e.estado).label);
+    const rango = `${fmtFecha(e.desde)} → ${e.hasta ? fmtFecha(e.hasta) : 'actualidad'}`;
+    if(esPae(e.estado)){
+      return `<tr><td class="cell-dim">—</td><td class="cell-dim">—</td><td class="cell-strong">${label}</td><td>${rango}</td></tr>`;
+    }
+    return `<tr><td class="cell-strong">${label}</td><td>${rango}</td><td class="cell-dim">—</td><td class="cell-dim">—</td></tr>`;
+  }).join('');
+  return `
+    <div class="historial-table-wrap">
+      <table class="historial-table">
+        <thead>
+          <tr>
+            <th>Estado</th>
+            <th>Vigente desde / hasta</th>
+            <th>Estado PAE</th>
+            <th>Vigente desde / hasta</th>
+          </tr>
+        </thead>
+        <tbody>${filas}</tbody>
+      </table>
     </div>
-  `).join('');
+  `;
 }
 
 // Estados de servicio de Vehiculos (tres opciones).
@@ -2143,13 +2165,11 @@ function abrirHistorialAlta(a){
       </div>
       <button class="modal-close" id="modalCloseBtn">✕</button>
     </div>
-    <div class="modal-body">
-      ${altaHistorialModalHtml(a)}
-    </div>
+    ${altaHistorialModalHtml(a)}
     <div class="modal-footer">
       <button id="modalCloseBtn2">Cerrar</button>
     </div>
-  `);
+  `, 'wide');
   document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
 }
