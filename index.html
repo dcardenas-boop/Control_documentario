@@ -113,8 +113,8 @@
     margin-bottom:18px;
   }
   .cards-row.cols-3{grid-template-columns:repeat(3,1fr);}
-  @media (max-width:900px){ .cards-row{grid-template-columns:repeat(2,1fr);} }
-  @media (max-width:520px){ .cards-row{grid-template-columns:1fr;} }
+  @media (max-width:900px){ .cards-row, .cards-row.cols-3{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:520px){ .cards-row, .cards-row.cols-3{grid-template-columns:1fr;} }
 
   .card{
     background:var(--card);
@@ -777,7 +777,7 @@
   <!-- ===================== GESTION DE ALTA SECTION ===================== -->
   <div id="section-altas" style="display:none;">
 
-    <div class="cards-row" id="cardsAltas"></div>
+    <div class="cards-row cols-3" id="cardsAltas"></div>
 
     <div class="toolbar">
       <button class="primary" id="btnNuevaAlta">+ Nueva alta</button>
