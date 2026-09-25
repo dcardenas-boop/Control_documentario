@@ -422,6 +422,8 @@
     font-family:var(--font);
   }
   .modal-footer button.danger{background:var(--red);border-color:var(--red);color:#fff;}
+  .modal-footer button.primary{background:var(--navy);border-color:var(--navy);color:#fff;}
+  .modal-footer button:disabled{opacity:0.6;cursor:wait;}
   .modal-footer button:hover{opacity:0.9;}
 
   .form-panel{
@@ -477,6 +479,16 @@
     background:var(--bg);color:var(--text);font-size:0.8rem;font-family:var(--font);
     width:100%;min-width:70px;box-sizing:border-box;
   }
+  .import-bloque{border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px;}
+  .import-bloque h4{margin:0 0 10px;font-size:0.95rem;}
+  .import-cifras{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .import-cifras div{background:var(--bg);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;}
+  .import-cifras b{font-size:1.3rem;}
+  .import-cifras span{font-size:0.75rem;color:var(--text-dim);}
+  .import-detalle{margin-top:8px;font-size:0.84rem;}
+  .import-detalle summary{cursor:pointer;font-weight:700;}
+  .import-detalle ul{margin:6px 0 0;padding-left:20px;max-height:220px;overflow-y:auto;}
+  .import-mes{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.86rem;padding:10px 0 0;}
   .mes-badge{
     display:block;width:max-content;margin-top:4px;padding:1px 7px;border-radius:10px;font-size:0.68rem;font-weight:700;
     background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);
@@ -608,6 +620,7 @@
           <option value="baja">Baja</option>
         </select>
         <button id="btnLimpiarVehiculos">Limpiar</button>
+        <button class="btn-importar-excel">📥 Importar Excel</button>
         <button class="primary" id="btnExportarVehiculos">Exportar CSV</button>
       </div>
 
@@ -708,6 +721,7 @@
           <option value="">Todos los motivos</option>
         </select>
         <button id="btnLimpiarPersonal">Limpiar</button>
+        <button class="btn-importar-excel">📥 Importar Excel</button>
         <button class="primary" id="btnExportarPersonal">Exportar CSV</button>
       </div>
 
@@ -751,6 +765,7 @@
       <div class="toolbar">
         <button class="primary" id="btnAgregarPersonaMes">+ Agregar persona a este mes</button>
         <input type="text" id="buscarPersonalMes" placeholder="Buscar por apellido, nombre, CUIL o empresa...">
+        <button class="btn-importar-excel">📥 Importar Excel</button>
       </div>
 
       <div class="form-panel" id="formPersonaMesPanel" style="display:none;">
@@ -3293,124 +3308,278 @@ function normalizarClave(s){
     .replace(/[^a-z0-9]/g, '');
 }
 
-function buscarValor(row, candidatos){
-  const claves = {};
-  Object.keys(row).forEach(k => { claves[normalizarClave(k)] = row[k]; });
-  for(const c of candidatos){
-    const v = claves[normalizarClave(c)];
-    if(v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
-  }
-  return '';
+/* Columnas que se reconocen en el Excel (sin importar mayúsculas,
+   tildes ni espacios). Sirve tanto para el Excel propio del panel
+   (hojas VEHICULOS / PERSONAL) como para el que se descarga de
+   Certronic (Apellido, Nombre, Cuil, Motivo No Acceso, Fecha, Estado). */
+const COLUMNAS_IMPORT = {
+  personal: {
+    cuil: ['cuil', 'cuit', 'nro cuil'],
+    apellido: ['apellido', 'apellidos'],
+    nombre: ['nombre', 'nombres'],
+    empresa: ['empresa', 'razon social', 'contratista'],
+    funcion: ['funcion', 'puesto'],
+    estado: ['estado', 'habilitacion', 'estado habilitacion'],
+    motivo: ['motivo', 'motivo no acceso', 'motivo de no acceso', 'motivo de inhabilitacion', 'motivo inhabilitacion'],
+    fecha: ['fecha', 'fecha de vencimiento', 'vencimiento', 'fecha vencimiento'],
+  },
+  vehiculos: {
+    dominio: ['dominio', 'patente'],
+    marca: ['marca'],
+    modelo: ['modelo'],
+    estado: ['estado', 'habilitacion', 'estado habilitacion'],
+    motivo: ['motivo', 'motivo no acceso', 'motivo de no acceso', 'motivo de inhabilitacion', 'motivo inhabilitacion'],
+    fecha: ['fecha', 'fecha de vencimiento', 'vencimiento', 'fecha vencimiento'],
+  },
+};
+const NOMBRE_CAMPO = { cuil:'CUIL', apellido:'Apellido', nombre:'Nombre', empresa:'Empresa', funcion:'Función',
+  estado:'Estado', motivo:'Motivo', fecha:'Fecha', dominio:'Dominio', marca:'Marca', modelo:'Modelo' };
+
+// Devuelve { campo: índice de columna } con las columnas que trae la hoja.
+function detectarColumnas(encabezados, mapa){
+  const norm = encabezados.map(normalizarClave);
+  const out = {};
+  Object.keys(mapa).forEach(campo => {
+    const idx = norm.findIndex(h => h && mapa[campo].some(c => normalizarClave(c) === h));
+    if(idx >= 0) out[campo] = idx;
+  });
+  return out;
 }
 
+// Fechas: número de serie de Excel, texto dd/mm/aaaa o aaaa-mm-dd.
 function excelFechaATexto(v){
   if(v === '' || v === null || v === undefined) return null;
-  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
   if(typeof v === 'number'){
     const d = XLSX.SSF.parse_date_code(v);
     if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+    return null;
+  }
+  if(v instanceof Date && !isNaN(v)){
+    return v.getFullYear() + '-' + String(v.getMonth()+1).padStart(2,'0') + '-' + String(v.getDate()).padStart(2,'0');
   }
   const s = String(v).trim();
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if(m){
     let [,dd,mm,yy] = m;
     if(yy.length===2) yy = '20'+yy;
     return `${yy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
   }
   if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
-  return s || null;
+  return null;
 }
 
-function hojaAJson(workbook, nombresPosibles){
-  const nombreReal = workbook.SheetNames.find(n => nombresPosibles.includes(normalizarClave(n)));
-  if(!nombreReal) return null;
-  return XLSX.utils.sheet_to_json(workbook.Sheets[nombreReal], { defval: '' });
-}
-
-function dedupeByKey(rows, key){
-  const map = new Map();
-  rows.forEach(r => map.set(r[key], r));
-  return Array.from(map.values());
-}
-
-function estadoDesdeTexto(row){
-  const t = buscarValor(row, ['estado','habilitacion','habilitación']).toLowerCase();
-  if(t.startsWith('habil') && !t.includes('no ') && !t.includes('inhab')) return 'Habilitado';
+function estadoNormalizado(texto){
+  const t = String(texto || '').trim().toLowerCase();
+  if(!t) return null;
   if(t.includes('suspend')) return 'Suspendido';
   if(t.includes('baja')) return 'Baja';
+  if(t.includes('inhab') || t.startsWith('no ')) return 'Inhabilitado';
+  if(t.startsWith('habil')) return 'Habilitado';
   return 'Inhabilitado';
 }
 
-function filasVehiculosARows(filas){
-  const rows = [];
-  filas.forEach(row=>{
-    const dominio = buscarValor(row, ['dominio','patente']).toUpperCase();
-    if(!dominio) return;
-    rows.push({
-      dominio,
-      marca: buscarValor(row, ['marca']) || null,
-      modelo: buscarValor(row, ['modelo']) || null,
-      estado: estadoDesdeTexto(row),
-      motivo: buscarValor(row, ['motivo','motivo de inhabilitacion','motivo de inhabilitación']) || null,
-      fecha: excelFechaATexto(buscarValor(row, ['fecha','fecha de vencimiento','vencimiento'])),
+// Lee una hoja y arma las filas SOLO con las columnas que vienen en el
+// archivo (las que no vienen, como Empresa o Función en el Excel de
+// Certronic, no se tocan en la base).
+function leerHojaImport(ws){
+  const matriz = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+  const iEnc = matriz.findIndex(f => f.some(c => String(c).trim() !== ''));
+  if(iEnc < 0) return null;
+  const encabezados = matriz[iEnc].map(c => String(c));
+  let tipo = null, cols = detectarColumnas(encabezados, COLUMNAS_IMPORT.personal);
+  if('cuil' in cols) tipo = 'personal';
+  else { cols = detectarColumnas(encabezados, COLUMNAS_IMPORT.vehiculos); if('dominio' in cols) tipo = 'vehiculos'; }
+  if(!tipo) return null;
+  const clave = tipo === 'personal' ? 'cuil' : 'dominio';
+  const filas = new Map();
+  matriz.slice(iEnc + 1).forEach(f => {
+    const valor = campo => (campo in cols) ? f[cols[campo]] : undefined;
+    let k = valor(clave);
+    k = tipo === 'personal' ? String(k == null ? '' : k).replace(/\D/g, '') : String(k == null ? '' : k).replace(/\s/g, '').toUpperCase();
+    if(!k) return;
+    const r = { [clave]: k };
+    Object.keys(cols).forEach(campo => {
+      if(campo === clave) return;
+      const v = valor(campo);
+      if(campo === 'fecha') r.fecha = excelFechaATexto(v);
+      else if(campo === 'estado') r.estado = estadoNormalizado(v);
+      else { const t = String(v == null ? '' : v).trim(); r[campo] = t || null; }
     });
+    filas.set(k, r); // si el CUIL/dominio se repite, queda la última fila
   });
-  return dedupeByKey(rows, 'dominio');
+  return { tipo, clave, campos: Object.keys(cols), filas: Array.from(filas.values()) };
 }
 
-function filasPersonalARows(filas){
-  const rows = [];
-  filas.forEach(row=>{
-    const cuil = buscarValor(row, ['cuil']);
-    const apellido = buscarValor(row, ['apellido']);
-    if(!cuil && !apellido) return;
-    rows.push({
-      apellido: apellido || null,
-      nombre: buscarValor(row, ['nombre']) || null,
-      cuil: cuil || null,
-      empresa: buscarValor(row, ['empresa']) || null,
-      funcion: buscarValor(row, ['funcion','función']) || null,
-      estado: estadoDesdeTexto(row),
-      motivo: buscarValor(row, ['motivo','motivo de inhabilitacion','motivo de inhabilitación']) || null,
-      fecha: excelFechaATexto(buscarValor(row, ['fecha','fecha de vencimiento','vencimiento'])),
-    });
+// Compara el archivo con lo que ya hay cargado.
+function analizarImport(hoja){
+  const actuales = hoja.tipo === 'personal' ? PERSONAL_DATA : VEHICULOS_DATA;
+  const porClave = new Map(actuales.map(x => [x[hoja.clave], x]));
+  const nuevos = [], actualizados = [], sinCambios = [], cambiosEstado = [], invalidos = [];
+  const camposDato = hoja.campos.filter(c => c !== hoja.clave);
+  hoja.filas.forEach(r => {
+    const act = porClave.get(r[hoja.clave]);
+    if(!act){
+      if(hoja.tipo === 'personal' && !r.apellido){ invalidos.push(r); return; }
+      nuevos.push(r); return;
+    }
+    const cambia = camposDato.some(c => (r[c] || null) !== (act[c] || null) && !(c === 'estado' && !r.estado));
+    if(r.estado && r.estado !== act.estado) cambiosEstado.push({ r, antes: act.estado });
+    (cambia ? actualizados : sinCambios).push(r);
   });
-  return dedupeByKey(rows.filter(r=>r.cuil), 'cuil');
+  const enArchivo = new Set(hoja.filas.map(r => r[hoja.clave]));
+  const faltantes = actuales.filter(x => !enArchivo.has(x[hoja.clave]));
+  return { nuevos, actualizados, sinCambios, cambiosEstado, invalidos, faltantes };
+}
+
+function nombreImport(tipo, r){
+  return tipo === 'personal' ? ([r.apellido, r.nombre].filter(Boolean).join(', ') + ' (' + r.cuil + ')') : r.dominio;
+}
+
+async function subirEnTandas(tabla, filas, onConflict, modo){
+  for(let i = 0; i < filas.length; i += 400){
+    const tanda = filas.slice(i, i + 400);
+    const q = modo === 'insert'
+      ? supabaseClient.from(tabla).insert(tanda)
+      : supabaseClient.from(tabla).upsert(tanda, { onConflict });
+    const { error } = await q;
+    if(error) throw error;
+  }
+}
+
+async function ejecutarImport(hojas, opciones){
+  const resumen = [];
+  for(const h of hojas){
+    const tabla = h.hoja.tipo;
+    const camposDato = h.hoja.campos.filter(c => c !== h.hoja.clave);
+    // Existentes: solo se actualizan las columnas que trae el archivo.
+    const existentes = h.analisis.actualizados.map(r => {
+      const o = { [h.hoja.clave]: r[h.hoja.clave] };
+      camposDato.forEach(c => { if(!(c === 'estado' && !r.estado)) o[c] = r[c]; });
+      return o;
+    });
+    // Nuevos: fila completa (lo que falte queda vacío; estado por defecto Habilitado).
+    const nuevos = h.analisis.nuevos.map(r => tabla === 'personal'
+      ? { cuil: r.cuil, apellido: r.apellido, nombre: r.nombre || '', empresa: r.empresa || null, funcion: r.funcion || null,
+          estado: r.estado || 'Habilitado', motivo: r.motivo || null, fecha: r.fecha || null }
+      : { dominio: r.dominio, marca: r.marca || null, modelo: r.modelo || null,
+          estado: r.estado || 'Habilitado', motivo: r.motivo || null, fecha: r.fecha || null });
+    // Si un mismo "existente" no trae ninguna columna para actualizar, se saltea.
+    const aActualizar = existentes.filter(o => Object.keys(o).length > 1);
+    if(aActualizar.length) await subirEnTandas(tabla, aActualizar, h.hoja.clave, 'upsert');
+    if(nuevos.length) await subirEnTandas(tabla, nuevos, null, 'insert');
+    resumen.push(`${tabla === 'personal' ? 'Personal' : 'Vehículos'}: ${nuevos.length} nuevos, ${aActualizar.length} actualizados, ${h.analisis.sinCambios.length} sin cambios`);
+
+    // Opcional: dejar este archivo como el estado de un mes (Personal > Por mes).
+    if(tabla === 'personal' && opciones.mes && h.hoja.campos.includes('estado')){
+      const filasMes = h.hoja.filas.filter(r => r.estado && !h.analisis.invalidos.includes(r))
+        .map(r => ({ mes: opciones.mes, cuil: r.cuil, estado: r.estado, motivo: r.motivo || null, agregado_manual: false }));
+      try{
+        await subirEnTandas('personal_mes', filasMes, 'mes,cuil', 'upsert');
+        resumen.push(`${filasMes.length} estados guardados en ${monthLabel(opciones.mes)}`);
+      }catch(err){
+        resumen.push(`No se pudo guardar el estado del mes (${err.message || err}) — ¿corriste el script 12?`);
+      }
+    }
+  }
+  return resumen;
+}
+
+function listaImportHtml(titulo, items, max){
+  if(!items.length) return '';
+  const mostrar = items.slice(0, max);
+  return `
+    <details class="import-detalle">
+      <summary>${titulo} (${items.length})</summary>
+      <ul>${mostrar.map(t => `<li>${escapeHtml(t)}</li>`).join('')}${items.length > max ? `<li class="cell-dim">… y ${items.length - max} más</li>` : ''}</ul>
+    </details>`;
+}
+
+function mostrarPreviewImport(hojas, nombreArchivo){
+  const hayPersonalConEstado = hojas.some(h => h.hoja.tipo === 'personal' && h.hoja.campos.includes('estado'));
+  const bloques = hojas.map(h => {
+    const a = h.analisis, t = h.hoja.tipo;
+    const faltanCols = Object.keys(COLUMNAS_IMPORT[t]).filter(c => !h.hoja.campos.includes(c));
+    return `
+      <div class="import-bloque">
+        <h4>${t === 'personal' ? '👤 Personal' : '🚚 Vehículos'} — ${h.hoja.filas.length} filas en el archivo</h4>
+        <div class="import-cifras">
+          <div><b>${a.nuevos.length}</b><span>nuevos</span></div>
+          <div><b>${a.actualizados.length}</b><span>se actualizan</span></div>
+          <div><b>${a.sinCambios.length}</b><span>sin cambios</span></div>
+          <div><b>${a.cambiosEstado.length}</b><span>cambian de estado</span></div>
+        </div>
+        <p class="cell-dim" style="margin:8px 0 0;">Columnas que se van a cargar: <b>${h.hoja.campos.map(c => NOMBRE_CAMPO[c]).join(', ')}</b>.
+          ${faltanCols.length ? `No vienen en el archivo (se mantiene lo que ya está cargado): ${faltanCols.map(c => NOMBRE_CAMPO[c]).join(', ')}.` : ''}</p>
+        ${listaImportHtml('Cambios de estado', a.cambiosEstado.map(x => nombreImport(t, x.r) + ': ' + x.antes + ' → ' + x.r.estado), 60)}
+        ${listaImportHtml('Nuevos', a.nuevos.map(r => nombreImport(t, r)), 60)}
+        ${listaImportHtml(t === 'personal' ? 'Cargados en el panel que NO están en el archivo (no se tocan)' : 'Cargados en el panel que NO están en el archivo (no se tocan)',
+            a.faltantes.map(x => nombreImport(t, x)), 60)}
+        ${listaImportHtml('Filas que no se pueden cargar (persona nueva sin apellido)', a.invalidos.map(r => r.cuil), 30)}
+      </div>`;
+  }).join('');
+  const meses = mesesPersonal();
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <p class="modal-head-title">Importar Excel</p>
+        <p class="modal-head-name">${escapeHtml(nombreArchivo)}</p>
+      </div>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 12px;">Revisá lo que se va a cargar. <b>Todavía no se guardó nada.</b></p>
+      ${bloques}
+      ${hayPersonalConEstado ? `
+        <label class="import-mes">
+          <input type="checkbox" id="importGuardarMes">
+          Guardar además estos estados como el estado de Personal del mes
+          <select class="inline-select" id="importMes">${meses.map(k => `<option value="${k}" ${k===mesActualKey()?'selected':''}>${monthLabel(k)}</option>`).join('')}</select>
+          <span class="cell-dim">(solapa Personal → Por mes)</span>
+        </label>` : ''}
+    </div>
+    <div class="modal-footer">
+      <button id="modalCloseBtn2">Cancelar</button>
+      <button class="primary" id="btnConfirmarImport">Importar</button>
+    </div>
+  `, 'wide');
+  document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
+  document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
+  document.getElementById('btnConfirmarImport').addEventListener('click', async (e)=>{
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Importando…';
+    const chk = document.getElementById('importGuardarMes');
+    const opciones = { mes: (chk && chk.checked) ? document.getElementById('importMes').value : null };
+    try{
+      const resumen = await ejecutarImport(hojas, opciones);
+      closeModal();
+      await loadData();
+      toast('Importación lista — ' + resumen.join(' · '));
+    }catch(err){
+      btn.disabled = false; btn.textContent = 'Importar';
+      toast('No se pudo importar: ' + (err.message || err), true);
+    }
+  });
 }
 
 async function procesarArchivoExcel(file){
   const reader = new FileReader();
-  reader.onload = async (e) => {
+  reader.onload = (e) => {
     try{
-      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
-      const filasVeh = hojaAJson(wb, ['vehiculos','vehiculo']);
-      const filasPer = hojaAJson(wb, ['personal']);
-      if(!filasVeh && !filasPer){
-        showError('<strong>No se encontraron hojas "VEHICULOS" o "PERSONAL"</strong> en el archivo. Verificá los nombres de las hojas del Excel.');
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const hojas = wb.SheetNames
+        .map(n => leerHojaImport(wb.Sheets[n]))
+        .filter(h => h && h.filas.length)
+        .map(hoja => ({ hoja, analisis: analizarImport(hoja) }));
+      if(!hojas.length){
+        toast('No se reconoció el archivo: tiene que tener una columna "CUIL" (personal) o "Dominio" (vehículos).', true);
         return;
       }
-      let msg = [];
-      if(filasVeh){
-        const rows = filasVehiculosARows(filasVeh);
-        const { error } = await supabaseClient.from('vehiculos').upsert(rows, { onConflict: 'dominio' });
-        if(error) throw error;
-        msg.push(`Vehículos: ${rows.length} filas importadas`);
-      }
-      if(filasPer){
-        const rows = filasPersonalARows(filasPer);
-        const { error } = await supabaseClient.from('personal').upsert(rows, { onConflict: 'cuil' });
-        if(error) throw error;
-        msg.push(`Personal: ${rows.length} filas importadas`);
-      }
-      toast(msg.join(' — '));
-      await loadData();
+      mostrarPreviewImport(hojas, file.name);
     }catch(err){
-      showError('<strong>No se pudo importar el archivo a Supabase.</strong> Detalle: <code>' + escapeHtml(err.message || String(err)) + '</code>');
+      toast('No se pudo leer el archivo: ' + (err.message || err), true);
     }
   };
-  reader.onerror = () => {
-    showError('No se pudo leer el archivo seleccionado.');
-  };
+  reader.onerror = () => toast('No se pudo leer el archivo seleccionado.', true);
   reader.readAsArrayBuffer(file);
 }
 
@@ -3419,6 +3588,7 @@ function initImportarExcel(){
   const btn = document.getElementById('btnImportarExcel');
   if(!btn || !input) return;
   btn.addEventListener('click', () => input.click());
+  document.querySelectorAll('.btn-importar-excel').forEach(b => b.addEventListener('click', () => input.click()));
   input.addEventListener('change', () => {
     const file = input.files && input.files[0];
     if(file) procesarArchivoExcel(file);
