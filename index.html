@@ -477,6 +477,10 @@
     background:var(--bg);color:var(--text);font-size:0.8rem;font-family:var(--font);
     width:100%;min-width:70px;box-sizing:border-box;
   }
+  .mes-badge{
+    display:block;width:max-content;margin-top:4px;padding:1px 7px;border-radius:10px;font-size:0.68rem;font-weight:700;
+    background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber);
+  }
   /* Gestión de Alta: la tabla se ajusta a los textos (sin cortar) */
   .altas-table{min-width:0;}
   .altas-table thead th{padding:10px 8px;white-space:normal;}
@@ -737,14 +741,47 @@
     <!-- Por mes view -->
     <div id="personalPorMes" style="display:none;">
       <div class="month-filter-bar" id="mesesPersonal">
-        <span class="months-hint">Filtrar personal por mes de vencimiento — desde enero 2026:</span>
+        <span class="months-hint">Elegí el mes — el estado que cargues acá vale <strong>solo para ese mes</strong> (no cambia los otros meses ni el listado general):</span>
         <button class="month-nav-btn" id="mesPersonalPrev" title="Mes anterior">‹</button>
-        <select class="month-select" id="mesPersonalSelect">
-          <option value="">Todos los meses</option>
-        </select>
+        <select class="month-select" id="mesPersonalSelect"></select>
         <button class="month-nav-btn" id="mesPersonalNext" title="Mes siguiente">›</button>
       </div>
       <div class="mes-resumen" id="resumenMesPersonal"></div>
+
+      <div class="toolbar">
+        <button class="primary" id="btnAgregarPersonaMes">+ Agregar persona a este mes</button>
+        <input type="text" id="buscarPersonalMes" placeholder="Buscar por apellido, nombre, CUIL o empresa...">
+      </div>
+
+      <div class="form-panel" id="formPersonaMesPanel" style="display:none;">
+        <h4 id="formPersonaMesTitulo">Agregar persona a este mes</h4>
+        <div class="form-grid">
+          <div class="form-field"><label>Apellido</label><input type="text" id="pmApellido" placeholder="Apellido"></div>
+          <div class="form-field"><label>Nombre</label><input type="text" id="pmNombre" placeholder="Nombre"></div>
+          <div class="form-field"><label>CUIL</label><input type="text" id="pmCuil" placeholder="20123456789"></div>
+          <div class="form-field"><label>Empresa</label><input type="text" id="pmEmpresa" placeholder="Empresa contratista"></div>
+          <div class="form-field"><label>Función</label><input type="text" id="pmFuncion" placeholder="Función / puesto"></div>
+          <div class="form-field">
+            <label>Estado en este mes</label>
+            <select id="pmEstado">
+              <option value="Habilitado">Habilitado</option>
+              <option value="Inhabilitado">Inhabilitado</option>
+              <option value="Suspendido">Suspendido</option>
+              <option value="Baja">Baja</option>
+            </select>
+          </div>
+          <div class="form-field" style="grid-column:1 / -1;"><label>Motivo</label><input type="text" id="pmMotivo" placeholder="Motivo (opcional)"></div>
+          <div class="form-field" style="grid-column:1 / -1;">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
+              <input type="checkbox" id="pmAlListado"> Agregarla también al listado general de Personal (si no, figura solo en este mes)
+            </label>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button id="btnCancelarPersonaMes">Cancelar</button>
+          <button class="primary" id="btnGuardarPersonaMes">Guardar</button>
+        </div>
+      </div>
       <div class="table-panel">
         <div class="table-panel-head">
           <h3 id="tituloMesPersonal">Seleccioná un mes</h3>
@@ -1160,18 +1197,24 @@ function getServicio(dominio){
   const v = VEHICULOS_DATA.find(x => x.dominio === dominio);
   return (v && v.servicio_estado) || 'en_servicio';
 }
+// Devuelve true si se guardó, false si no (y avisa por qué).
 async function setServicio(dominio, value){
   const v = VEHICULOS_DATA.find(x => x.dominio === dominio);
-  if(!v) return;
+  if(!v){ toast('Este vehículo todavía no tiene registro propio para guardar el servicio', true); return false; }
   const prev = v.servicio_estado;
   v.servicio_estado = value;
   try{
     const { error } = await supabaseClient.from('vehiculos').update({ servicio_estado: value }).eq('dominio', dominio);
     if(error) throw error;
+    return true;
   }catch(err){
     v.servicio_estado = prev;
-    toast('No se pudo guardar el cambio de servicio: ' + (err.message||err));
-    renderCardsVehiculos(); renderVehiculos();
+    const msg = String(err.message || err);
+    const faltaColumna = /servicio_estado/i.test(msg) && /(column|columna|schema cache)/i.test(msg);
+    toast(faltaColumna
+      ? 'No se pudo guardar: falta la columna "servicio_estado" en Supabase. Corré el script 12_servicio_y_personal_por_mes.sql.'
+      : 'No se pudo guardar el cambio de servicio: ' + msg, true);
+    return false;
   }
 }
 
@@ -1267,9 +1310,94 @@ async function updatePersonaCuil(cuilOriginal, nuevoCuilRaw){
     const { error } = await supabaseClient.from('personal').update({ cuil: nuevoCuil }).eq('cuil', cuilOriginal);
     if(error) throw error;
     p.cuil = nuevoCuil;
+    // Los estados por mes de esa persona siguen a su nuevo CUIL.
+    PERSONAL_MES.forEach(r => { if(r.cuil === cuilOriginal) r.cuil = nuevoCuil; });
+    if(personalMesDisponible){
+      supabaseClient.from('personal_mes').update({ cuil: nuevoCuil }).eq('cuil', cuilOriginal).then(()=>{}, ()=>{});
+    }
     return true;
   }catch(err){
     toast('No se pudo guardar: ' + (err.message||err));
+    return false;
+  }
+}
+
+/* ---------- Personal POR MES (tabla personal_mes) ----------
+   Un registro por persona y por mes con el estado (y motivo) de ESE
+   mes. Si una persona no tiene registro en un mes, se usa su estado
+   general. También guarda personas agregadas a mano solo a un mes. */
+let PERSONAL_MES = [];
+let personalMesDisponible = true; // false si la tabla todavía no existe en Supabase
+
+function mesActualKey(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
+function registroMes(cuil, mes){
+  return PERSONAL_MES.find(r => r.cuil === cuil && r.mes === mes) || null;
+}
+// Todo el personal general (con el estado/motivo de ese mes si se cargó)
+// + las personas agregadas solo a ese mes.
+function personalDelMes(mes){
+  const generales = personalEffectiveList();
+  const cuiles = new Set(generales.map(p => p.cuil));
+  const out = generales.map(p => {
+    const r = registroMes(p.cuil, mes);
+    return Object.assign({}, p, {
+      estado: r ? r.estado : p.estado,
+      motivo: r ? (r.motivo || null) : p.motivo,
+      _mes: mes, _estadoGeneral: p.estado, _registroMes: !!r,
+    });
+  });
+  PERSONAL_MES.filter(r => r.mes === mes && r.agregado_manual && !cuiles.has(r.cuil)).forEach(r => {
+    out.push({
+      apellido: r.apellido || '', nombre: r.nombre || '', cuil: r.cuil, empresa: r.empresa || '', funcion: r.funcion || '',
+      estado: r.estado, motivo: r.motivo || null, fecha: null,
+      _mes: mes, _soloMes: true, _registroMes: true,
+    });
+  });
+  out.sort((a,b) => (a.apellido||'').localeCompare(b.apellido||''));
+  return out;
+}
+function avisoFaltaTablaMes(){
+  toast('No se pudo guardar: falta la tabla "personal_mes" en Supabase. Corré el script 12_servicio_y_personal_por_mes.sql.', true);
+}
+// Crea o actualiza el registro de una persona en un mes.
+async function guardarRegistroMes(cuil, mes, cambios){
+  if(!personalMesDisponible){ avisoFaltaTablaMes(); return false; }
+  const existente = registroMes(cuil, mes);
+  const general = personalEffectiveList().find(p => p.cuil === cuil);
+  const fila = Object.assign(
+    { mes, cuil, estado: general ? general.estado : 'Habilitado', motivo: general ? (general.motivo || null) : null,
+      apellido: null, nombre: null, empresa: null, funcion: null, agregado_manual: false },
+    existente ? {
+      estado: existente.estado, motivo: existente.motivo, apellido: existente.apellido, nombre: existente.nombre,
+      empresa: existente.empresa, funcion: existente.funcion, agregado_manual: existente.agregado_manual,
+    } : {},
+    cambios
+  );
+  try{
+    const { data, error } = await supabaseClient.from('personal_mes').upsert(fila, { onConflict: 'mes,cuil' }).select().single();
+    if(error) throw error;
+    if(existente) Object.assign(existente, data); else PERSONAL_MES.push(data);
+    return true;
+  }catch(err){
+    const msg = String(err.message || err);
+    if(/personal_mes/i.test(msg) && /(does not exist|no existe|schema cache|could not find)/i.test(msg)){ avisoFaltaTablaMes(); }
+    else toast('No se pudo guardar el estado del mes: ' + msg, true);
+    return false;
+  }
+}
+async function borrarRegistroMes(cuil, mes){
+  const r = registroMes(cuil, mes);
+  if(!r) return true;
+  try{
+    const { error } = await supabaseClient.from('personal_mes').delete().eq('mes', mes).eq('cuil', cuil);
+    if(error) throw error;
+    PERSONAL_MES = PERSONAL_MES.filter(x => x !== r);
+    return true;
+  }catch(err){
+    toast('No se pudo quitar: ' + (err.message||err), true);
     return false;
   }
 }
@@ -1378,12 +1506,14 @@ async function guardarObservacionesAlta(a){
 /* ---------- Rechazos en acceso a yacimiento (guardado en Supabase) ---------- */
 let rechazos = [];
 
-function toast(msg){
+// esError = true: el cartel queda más tiempo, para poder leerlo.
+function toast(msg, esError){
   const t = document.getElementById('toast');
+  if(!esError && /^No se pudo/i.test(msg)) esError = true;
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toast._tm);
-  toast._tm = setTimeout(()=>t.classList.remove('show'), 2200);
+  toast._tm = setTimeout(()=>t.classList.remove('show'), esError ? 7000 : 2200);
 }
 
 function openModal(html, size){
@@ -1594,8 +1724,8 @@ function bindVehiculoRowEvents(container){
     sel.addEventListener('change', async ()=>{
       const dom = sel.getAttribute('data-servicio-dominio');
       const nuevoValor = sel.value;
-      await setServicio(dom, nuevoValor);
-      toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
+      const ok = await setServicio(dom, nuevoValor);
+      if(ok) toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
       renderCardsVehiculos();
       renderVehiculos();
     });
@@ -1690,8 +1820,8 @@ function openFichaVehiculo(dom){
   document.getElementById('modalCloseBtn2').addEventListener('click', closeModal);
   document.getElementById('modalServicioSelect').addEventListener('change', async (e)=>{
     const nuevoValor = e.target.value;
-    await setServicio(dom, nuevoValor);
-    toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
+    const ok = await setServicio(dom, nuevoValor);
+    if(ok) toast(dom + ': ' + servicioEstadoInfo(nuevoValor).label);
     renderCardsVehiculos();
     renderVehiculos();
     openFichaVehiculo(dom);
@@ -1877,6 +2007,7 @@ function renderCardsPersonal(){
 }
 
 function personaRowHtml(p){
+  if(p._mes) return personaMesRowHtml(p);
   const esAlta = !!p._altaId; // persona que entró por una alta aprobada: no tiene fila propia en Supabase todavía
   return `
     <tr data-cuil="${escapeHtml(p.cuil)}">
@@ -1904,7 +2035,84 @@ function personaRowHtml(p){
   `;
 }
 
+// Fila de la vista "Por mes": Estado y Motivo son los de ESE mes.
+// Las personas agregadas solo a este mes editan sus datos en el
+// registro del mes; las del listado general editan sus datos generales.
+function personaMesRowHtml(p){
+  const esAlta = !!p._altaId;
+  const c = escapeHtml(p.cuil);
+  const mes = escapeHtml(p._mes);
+  const campoGeneral = (campo, valor) =>
+    `<input type="text" class="inline-text" data-campo="${campo}" data-cuil="${c}" value="${escapeHtml(valor||'')}" ${esAlta?'disabled':''}>`;
+  const campoMes = (campo, valor) =>
+    `<input type="text" class="inline-text" data-mes-campo="${campo}" data-cuil="${c}" data-mes="${mes}" value="${escapeHtml(valor||'')}">`;
+  const campo = (nombre, valor) => p._soloMes ? campoMes(nombre, valor) : campoGeneral(nombre, valor);
+  const difiere = !p._soloMes && p._registroMes && p._estadoGeneral && p._estadoGeneral !== p.estado;
+  return `
+    <tr data-cuil="${c}">
+      <td class="cell-strong">${campo('apellido', p.apellido)}${p._soloMes ? '<div class="mes-badge" title="Agregada a mano solo a este mes">Solo este mes</div>' : ''}</td>
+      <td>${campo('nombre', p.nombre)}</td>
+      <td><input type="text" class="inline-text" value="${c}" disabled title="${p._soloMes ? 'Para cambiar el CUIL, quitala del mes y volvé a agregarla' : 'El CUIL se edita desde el Listado'}"></td>
+      <td>${campo('empresa', p.empresa)}</td>
+      <td>${campo('funcion', p.funcion)}</td>
+      <td>
+        <select class="inline-select estado-select ${statusClass(p.estado)}" data-mes-campo="estado" data-cuil="${c}" data-mes="${mes}">
+          ${estadoOptionsHtml(p.estado)}
+        </select>
+        ${difiere ? `<div class="cell-dim" style="margin-top:3px;font-size:0.72rem;">General: ${escapeHtml(p._estadoGeneral)}</div>` : ''}
+      </td>
+      <td><input type="text" class="inline-text" data-mes-campo="motivo" data-cuil="${c}" data-mes="${mes}" value="${escapeHtml(p.motivo||'')}" placeholder="—"></td>
+      <td class="cell-dim">${p._soloMes ? '—' : fmtFecha(p.fecha)}</td>
+      <td>
+        <div class="action-cell">
+          ${p._soloMes
+            ? `<button class="btn-trash" title="Quitar de este mes" data-quitar-mes-cuil="${c}" data-mes="${mes}">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+               </button>`
+            : `<button class="btn-ficha" data-ficha-cuil="${c}">Ver ficha</button>
+               ${p._registroMes ? `<button class="btn-ficha" title="Volver a usar el estado general en este mes" data-restablecer-mes-cuil="${c}" data-mes="${mes}">↺</button>` : ''}`}
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
 function bindPersonaRowEvents(container){
+  // ---- Vista "Por mes": cambios que se guardan SOLO en ese mes ----
+  container.querySelectorAll('[data-mes-campo]').forEach(el=>{
+    el.addEventListener('change', async ()=>{
+      const campo = el.getAttribute('data-mes-campo');
+      const cuil = el.getAttribute('data-cuil');
+      const mes = el.getAttribute('data-mes');
+      const valor = campo === 'estado' ? el.value : (el.value.trim() || null);
+      const ok = await guardarRegistroMes(cuil, mes, { [campo]: valor });
+      if(ok) toast(campo === 'estado' ? (cuil + ': ' + valor + ' en ' + monthLabel(mes)) : 'Guardado en ' + monthLabel(mes));
+      renderPersonal();
+    });
+  });
+  container.querySelectorAll('[data-quitar-mes-cuil]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const cuil = btn.getAttribute('data-quitar-mes-cuil');
+      const mes = btn.getAttribute('data-mes');
+      const r = registroMes(cuil, mes);
+      const nombre = r ? [r.apellido, r.nombre].filter(Boolean).join(', ') : cuil;
+      if(confirm('¿Quitar a ' + nombre + ' de ' + monthLabel(mes) + '?')){
+        if(await borrarRegistroMes(cuil, mes)) toast(nombre + ' quitado de ' + monthLabel(mes));
+        renderPersonal();
+      }
+    });
+  });
+  container.querySelectorAll('[data-restablecer-mes-cuil]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const cuil = btn.getAttribute('data-restablecer-mes-cuil');
+      const mes = btn.getAttribute('data-mes');
+      if(confirm('¿Borrar el estado cargado para ' + monthLabel(mes) + ' y volver a usar el estado general de esta persona?')){
+        if(await borrarRegistroMes(cuil, mes)) toast('Restablecido al estado general');
+        renderPersonal();
+      }
+    });
+  });
+
   container.querySelectorAll('select[data-campo="estado"]').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
       const cuil = sel.getAttribute('data-cuil');
@@ -2000,19 +2208,21 @@ function openFichaPersona(cuil){
   });
 }
 
-function perFilteredMinusQuick(){
-  let list = personalEffectiveList().slice();
+// base: lista de la que partir (por defecto el listado general; en
+// "Por mes" se le pasa personalDelMes(mes), con los estados de ese mes).
+function perFilteredMinusQuick(base){
+  let list = (base || personalEffectiveList()).slice();
   const s = perState.search.trim().toLowerCase();
   if(s){
-    list = list.filter(p => (p.apellido||'').toLowerCase().includes(s) || (p.nombre||'').toLowerCase().includes(s) || (p.cuil||'').toLowerCase().includes(s));
+    list = list.filter(p => (p.apellido||'').toLowerCase().includes(s) || (p.nombre||'').toLowerCase().includes(s) || (p.cuil||'').toLowerCase().includes(s) || (p.empresa||'').toLowerCase().includes(s));
   }
   if(perState.estado) list = list.filter(p => p.estado === perState.estado);
   if(perState.empresa) list = list.filter(p => p.empresa === perState.empresa);
   if(perState.motivo) list = list.filter(p => p.motivo === perState.motivo);
   return list;
 }
-function filteredPersonal(){
-  let list = perFilteredMinusQuick();
+function filteredPersonal(base){
+  let list = perFilteredMinusQuick(base);
   if(perState.quick === 'habilitados') list = list.filter(p => p.estado === 'Habilitado');
   if(perState.quick === 'no_habilitados') list = list.filter(p => p.estado !== 'Habilitado');
   return list;
@@ -2033,20 +2243,36 @@ function renderPersonalTable(){
   bindPersonaRowEvents(tbody);
 }
 
+// Meses disponibles: desde enero 2026 hasta el mes que viene (o el
+// último mes que tenga algo cargado, si es más adelante).
+function mesesPersonal(){
+  const d = new Date();
+  const proximo = new Date(d.getFullYear(), d.getMonth()+1, 1);
+  const proximoKey = proximo.getFullYear() + '-' + String(proximo.getMonth()+1).padStart(2,'0');
+  const conDatos = PERSONAL_MES.map(r => r.mes).filter(Boolean).sort();
+  let maxKey = proximoKey;
+  if(conDatos.length && conDatos[conDatos.length-1] > maxKey) maxKey = conDatos[conDatos.length-1];
+  const out = [];
+  let [y, m] = RANGE_START.split('-').map(Number);
+  const [ey, em] = maxKey.split('-').map(Number);
+  while(y < ey || (y === ey && m <= em)){
+    out.push(y + '-' + String(m).padStart(2,'0'));
+    m++; if(m > 12){ m = 1; y++; }
+  }
+  return out;
+}
+
 function renderMesesPersonal(){
-  const months = monthRangeFrom(personalEffectiveList());
-  const counts = {};
-  filteredPersonal().forEach(p=>{
-    const k = monthKey(p.fecha);
-    if(!k) return;
-    counts[k] = (counts[k]||0)+1;
-  });
-  if(perState.mes && !months.includes(perState.mes)) perState.mes = null;
+  const months = mesesPersonal();
+  if(!perState.mes || !months.includes(perState.mes)){
+    perState.mes = months.includes(mesActualKey()) ? mesActualKey() : months[months.length-1];
+  }
+  const cargados = {};
+  PERSONAL_MES.forEach(r => { cargados[r.mes] = (cargados[r.mes]||0) + 1; });
 
   const sel = document.getElementById('mesPersonalSelect');
-  sel.innerHTML = '<option value="">Todos los meses</option>' +
-    months.map(k => `<option value="${k}" ${perState.mes===k?'selected':''}>${monthLabel(k)} — ${counts[k]||0}</option>`).join('');
-  sel.value = perState.mes || '';
+  sel.innerHTML = months.map(k => `<option value="${k}" ${perState.mes===k?'selected':''}>${monthLabel(k)}${cargados[k] ? ' — ' + cargados[k] + ' cargado' + (cargados[k]===1?'':'s') : ''}</option>`).join('');
+  sel.value = perState.mes;
 
   const idx = perState.mes ? months.indexOf(perState.mes) : -1;
   document.getElementById('mesPersonalPrev').disabled = idx <= 0;
@@ -2069,13 +2295,15 @@ function renderMesesPersonal(){
 function renderResumenMesPersonal(){
   const box = document.getElementById('resumenMesPersonal');
   if(!perState.mes){ box.innerHTML=''; return; }
-  const base = perFilteredMinusQuick().filter(p => monthKey(p.fecha) === perState.mes);
+  const base = perFilteredMinusQuick(personalDelMes(perState.mes));
   const ok = base.filter(p => p.estado === 'Habilitado').length;
   const bad = base.length - ok;
+  const pct = base.length ? Math.round((ok/base.length)*100) : 0;
   box.innerHTML = `
-    <div class="chip total"><span class="dot"></span>Total del mes <span class="n">${base.length}</span></div>
+    <div class="chip total"><span class="dot"></span>Total ${monthLabel(perState.mes)} <span class="n">${base.length}</span></div>
     <div class="chip ok"><span class="dot"></span>Habilitados <span class="n">${ok}</span></div>
     <div class="chip bad"><span class="dot"></span>No habilitados <span class="n">${bad}</span></div>
+    <div class="chip total"><span class="dot"></span>% Habilitación del mes <span class="n">${pct}%</span></div>
   `;
 }
 
@@ -2086,23 +2314,85 @@ function renderPersonalPorMes(){
   const countEl = document.getElementById('countMesPersonal');
   const tbody = document.getElementById('tbodyMesPersonal');
   const empty = document.getElementById('emptyMesPersonal');
-  // Se muestra SIEMPRE todo el personal (no solo el que vence en el mes
-  // elegido), para poder revisar y cargar el estado de habilitación de
-  // cualquiera desde acá. El selector de mes de arriba queda como
-  // referencia de vencimientos (ver los chips "Total del mes / Habilitados
-  // / No habilitados"), pero ya no filtra esta lista.
-  const list = filteredPersonal();
-  titulo.textContent = perState.mes ? ('Personal — todos (referencia: vencimientos de ' + monthLabel(perState.mes) + ')') : 'Personal — todos';
+  const buscador = document.getElementById('buscarPersonalMes');
+  if(buscador && buscador.value !== perState.search) buscador.value = perState.search;
+  // Todo el personal + los agregados a este mes, con el estado de ESTE mes.
+  const list = filteredPersonal(personalDelMes(perState.mes));
+  titulo.textContent = 'Personal — ' + monthLabel(perState.mes);
   countEl.textContent = list.length + ' registro' + (list.length===1?'':'s');
   if(list.length === 0){
     tbody.innerHTML = '';
     empty.style.display = 'block';
-    empty.textContent = 'No hay personal cargado todavía.';
+    empty.textContent = 'No hay personas para este mes con el filtro actual.';
   } else {
     empty.style.display = 'none';
     tbody.innerHTML = list.map(personaRowHtml).join('');
   }
   bindPersonaRowEvents(tbody);
+}
+
+function initPersonalMes(){
+  document.getElementById('buscarPersonalMes').addEventListener('input', e=>{
+    perState.search = e.target.value;
+    const b = document.getElementById('buscarPersonal');
+    if(b) b.value = e.target.value;
+    renderPersonalPorMes();
+  });
+  const panel = document.getElementById('formPersonaMesPanel');
+  document.getElementById('btnAgregarPersonaMes').addEventListener('click', ()=>{
+    ['pmApellido','pmNombre','pmCuil','pmEmpresa','pmFuncion','pmMotivo'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('pmEstado').value = 'Habilitado';
+    document.getElementById('pmAlListado').checked = false;
+    document.getElementById('formPersonaMesTitulo').textContent = 'Agregar persona a ' + monthLabel(perState.mes);
+    panel.style.display = 'block';
+    document.getElementById('pmApellido').focus();
+  });
+  document.getElementById('btnCancelarPersonaMes').addEventListener('click', ()=>{ panel.style.display = 'none'; });
+  document.getElementById('btnGuardarPersonaMes').addEventListener('click', async ()=>{
+    const mes = perState.mes;
+    const val = id => document.getElementById(id).value.trim();
+    const apellido = val('pmApellido'), nombre = val('pmNombre');
+    const cuil = val('pmCuil').replace(/[\s-]/g, '');
+    const empresa = val('pmEmpresa') || null, funcion = val('pmFuncion') || null;
+    const estado = document.getElementById('pmEstado').value;
+    const motivo = val('pmMotivo') || null;
+    const alListado = document.getElementById('pmAlListado').checked;
+    if(!apellido || !cuil){ toast('Completá al menos apellido y CUIL', true); return; }
+
+    const general = personalEffectiveList().find(p => p.cuil === cuil);
+    let ok = false;
+    if(general){
+      // Ya está en el listado general: solo se carga su estado para este mes.
+      ok = await guardarRegistroMes(cuil, mes, { estado, motivo });
+      if(ok) toast((general.apellido || cuil) + ' ya estaba en el listado: se cargó su estado para ' + monthLabel(mes));
+    } else if(alListado){
+      try{
+        const fila = { apellido, nombre: nombre || '', cuil, empresa, funcion, estado, motivo, fecha: null };
+        const { data, error } = await supabaseClient.from('personal').insert(fila).select().single();
+        if(error) throw error;
+        PERSONAL_DATA.push({
+          id: data.id, apellido: data.apellido || '', nombre: data.nombre || '', cuil: data.cuil || '',
+          empresa: data.empresa || '', funcion: data.funcion || '', estado: data.estado,
+          motivo: data.motivo || null, fecha: data.fecha || null,
+        });
+        ok = true;
+        // Además queda fijo su estado en este mes (si la tabla por mes está disponible).
+        if(personalMesDisponible) await guardarRegistroMes(cuil, mes, { estado, motivo });
+        toast(apellido + ' agregado al listado general y a ' + monthLabel(mes));
+      }catch(err){
+        toast('No se pudo agregar: ' + (err.message||err), true);
+      }
+    } else {
+      ok = await guardarRegistroMes(cuil, mes, { estado, motivo, apellido, nombre: nombre || null, empresa, funcion, agregado_manual: true });
+      if(ok) toast(apellido + ' agregado a ' + monthLabel(mes));
+    }
+    if(ok){
+      panel.style.display = 'none';
+      populatePersonalFilters();
+      renderCardsPersonal();
+      renderPersonal();
+    }
+  });
 }
 
 function renderPersonal(){
@@ -2880,6 +3170,18 @@ async function loadData(opts){
     if(aRes.error) throw aRes.error;
     if(rRes.error) throw rRes.error;
 
+    // Estados de Personal por mes. Si la tabla todavía no existe (falta
+    // correr el script 12) el resto del panel funciona igual.
+    try{
+      const { data: mesData, error: mesError } = await supabaseClient.from('personal_mes').select('*');
+      if(mesError) throw mesError;
+      PERSONAL_MES = mesData || [];
+      personalMesDisponible = true;
+    }catch(err){
+      PERSONAL_MES = [];
+      personalMesDisponible = false;
+    }
+
     VEHICULOS_DATA = vRes.data.map(r => ({
       id: r.id,
       dominio: r.dominio,
@@ -3225,6 +3527,7 @@ initVehiculosToolbar();
 initPersonalToolbar();
 initAltasForm();
 initRechazosForm();
+initPersonalMes();
 initImportarExcel();
 document.getElementById('altaFechaCarga').value = todayISO();
 document.getElementById('rechazoFecha').value = todayISO();
