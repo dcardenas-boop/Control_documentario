@@ -890,6 +890,7 @@
             <option value="">— Sin auditoría PAE —</option>
             <option value="pae_control_documentario">Pendiente de auditoría PAE - Control documentario</option>
             <option value="pae_relaciones_laborales">Pendiente de auditoría PAE - Relaciones laborales</option>
+            <option value="pae_aprobada">Alta aprobada por PAE</option>
           </select>
         </div>
         <div class="form-field">
@@ -1039,6 +1040,7 @@ const ALTA_ESTADOS_PROGRESO = [
 const ALTA_ESTADOS_PAE = [
   { value: 'pae_control_documentario', label: 'Pendiente de auditoría PAE - Control documentario', badge: 'status-suspendido' },
   { value: 'pae_relaciones_laborales', label: 'Pendiente de auditoría PAE - Relaciones laborales', badge: 'status-suspendido' },
+  { value: 'pae_aprobada', label: 'Alta aprobada por PAE', badge: 'status-habilitado' },
 ];
 const ALTA_ESTADOS = ALTA_ESTADOS_PROGRESO.concat(ALTA_ESTADOS_PAE);
 function altaEstadoInfo(value){
@@ -1071,7 +1073,7 @@ function altaEstadoPaeOptionsHtml(selected, corto){
 // de aprobación/cierre se siga viendo en "Historial".
 function altaMigrarPaeDesdeHistorial(a){
   const h = a.historial || [];
-  const esPae = e => e && (e.estado === 'pae_control_documentario' || e.estado === 'pae_relaciones_laborales');
+  const esPae = e => e && ALTA_ESTADOS_PAE.some(x => x.value === e.estado);
   const paeEntries = h.filter(esPae);
   if(paeEntries.length && !a.estadoPae){
     const abierta = paeEntries.find(e => !e.hasta);
